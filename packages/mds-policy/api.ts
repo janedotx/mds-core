@@ -23,6 +23,7 @@ import db from '@mds-core/mds-db'
 import { now, pathsFor, NotFoundError, isUUID } from '@mds-core/mds-utils'
 import log from '@mds-core/mds-logger'
 import { PolicyApiRequest, PolicyApiResponse } from './types'
+import { sign, verify, getPublicKey } from './mds-signing-tool'
 
 function api(app: express.Express): express.Express {
   /**
@@ -32,7 +33,7 @@ function api(app: express.Express): express.Express {
     res.header('Access-Control-Allow-Origin', '*')
     try {
       // verify presence of provider_id
-      if (!(req.path.includes('/health') || req.path === '/' || req.path === '/schema/policy')) {
+      if (false && !(req.path.includes('/health') || req.path === '/' || req.path === '/schema/policy')) {
         if (res.locals.claims) {
           /* TEMPORARILY REMOVING SO NON-PROVIDERS CAN ACCESS POLICY API */
           // const { provider_id } = res.locals.claims
@@ -188,6 +189,27 @@ function api(app: express.Express): express.Express {
 
   app.get(pathsFor('/schema/policy'), (req, res) => {
     res.status(200).send(joiToJsonSchema(policySchema))
+  })
+
+  app.post(pathsFor('/sign'), function (req, res, next) {
+    const policy = req.body
+
+    res.send(sign(policy))
+  })
+
+  app.post(pathsFor('/verify'), function (req, res, next) {
+    const data = req.body
+    const { policy, signature } = data
+
+    res.send({ result: verify(policy, signature) })
+  })
+
+  app.get(pathsFor('/public_key'), function (req, res, next) {
+    res.send(getPublicKey())
+  })
+
+  app.post(pathsFor('/roll_keys'), function (req, res, next) {
+    res.send(true)
   })
 
   return app
