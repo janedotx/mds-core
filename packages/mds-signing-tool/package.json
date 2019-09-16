@@ -1,0 +1,26 @@
+{
+  "name": "@mds-core/mds-signing-tool",
+  "description": "MDS Policy Signing Tool",
+  "version": "0.0.10",
+  "license": "Apache-2.0",
+  "engineStrict": true,
+  "engines": {
+    "node": ">= 8.0.0",
+    "npm": ">= 6.8.0"
+  },
+  "dependencies": {},
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "start": "PATH_PREFIX=/policy yarn watch server",
+    "test": "yarn test:eslint && yarn test:unit",
+    "test:eslint": "eslint --fix --ignore-path ../../.gitignore '**/*.ts'",
+    "test:unit": "PATH_PREFIX=/policy DOTENV_CONFIG_PATH=../../.env nyc --check-coverage --exclude tests --extension .ts --lines 80 --reporter=text --reporter=html ts-mocha --project ../../tsconfig.json --require tsconfig-paths/register --require source-map-support/register --require dotenv/config --recursive tests/**/*.ts",
+    "watch": "nodemon --watch '../../packages' --ext 'ts' --ignore '*.d.ts' --exec yarn watch:exec --",
+    "watch:exec": "yarn build && DOTENV_CONFIG_PATH=../../.env ts-node -r dotenv/config"
+  }
+}
