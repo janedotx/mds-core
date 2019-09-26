@@ -323,7 +323,6 @@ export interface ComplianceResponse {
   policy: Policy
   compliance: Compliance[]
   total_violations: number
-  vehicles_in_violation: { device_id: UUID; rule_id: UUID }[]
 }
 
 // We don't put the publish_date into the geography_json column

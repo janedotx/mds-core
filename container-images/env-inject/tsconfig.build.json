@@ -3,5 +3,7 @@
   "compilerOptions": {
     "outDir": "dist"
   },
-  "references": []
+  "references": [
+    { "path": "../../packages/mds-api-server/tsconfig.build.json" }
+  ]
 }

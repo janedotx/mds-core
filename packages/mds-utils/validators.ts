@@ -41,12 +41,11 @@ interface ValidatorOptions {
 // Convert empty string to undefined so required/optional works as expected
 const stringSchema = Joi.string().empty('')
 
-// Don't allow type conversion
-const numberSchema = Joi.number().options({ convert: false })
-
 const uuidSchema = stringSchema.guid()
 
-const timestampSchema = numberSchema.min(1420099200000)
+const timestampSchema = Joi.number()
+  .options({ convert: false })
+  .min(1420099200000)
 
 const providerIdSchema = uuidSchema.valid(Object.keys(providers))
 
@@ -55,21 +54,21 @@ const vehicleIdSchema = stringSchema.max(255)
 const telemetrySchema = Joi.object().keys({
   gps: Joi.object()
     .keys({
-      lat: numberSchema
+      lat: Joi.number()
         .min(-90)
         .max(90)
         .required(),
-      lng: numberSchema
+      lng: Joi.number()
         .min(-180)
         .max(180)
         .required(),
-      speed: numberSchema.optional(),
-      heading: numberSchema.optional(),
-      accuracy: numberSchema.optional(),
-      altitude: numberSchema.optional()
+      speed: Joi.number().optional(),
+      heading: Joi.number().optional(),
+      accuracy: Joi.number().optional(),
+      altitude: Joi.number().optional()
     })
     .required(),
-  charge: numberSchema.optional(),
+  charge: Joi.number().optional(),
   provider_id: providerIdSchema.optional(),
   device_id: uuidSchema.optional(),
   timestamp: timestampSchema.required()
@@ -110,7 +109,7 @@ interface NumberValidatorOptions extends ValidatorOptions {
 export const isValidNumber = (value: unknown, options: Partial<NumberValidatorOptions> = {}): value is number =>
   Validate(
     value,
-    numberSchema
+    Joi.number()
       .min(options.min === undefined ? Number.MIN_SAFE_INTEGER : options.min)
       .max(options.max === undefined ? Number.MAX_SAFE_INTEGER : options.max),
     options

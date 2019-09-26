@@ -6,7 +6,7 @@ metadata:
   name: {{ $api.name }}
   labels:
     app: {{ $api.name }}
-  namespace: {{ $.Release.Namespace }}
+    namespace: {{ $.Release.Namespace }}
 spec:
   replicas: 1
   selector:
@@ -23,7 +23,7 @@ spec:
         image: {{ $.Values.registry }}/{{ $api.name }}:{{ $api.version }}
         {{- else }}
         image: {{ $api.name }}:{{ $api.version }}
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         {{- end }}
         resources:
           limits:
@@ -37,6 +37,10 @@ spec:
           name: user-port
           protocol: TCP
         env:
+          - name: PORT
+            value: {{ $api.port | quote }}
+          - name: EVENT_SOURCE
+            value: cloudevents
           - name: PATH_PREFIX
             value: {{ $api.pathPrefix }}
           - name: TIMEZONE
@@ -46,6 +50,8 @@ spec:
             value: {{ $.Values.postgresql.postgresqlUsername }}
           - name: PG_NAME
             value: {{ $.Values.postgresql.postgresqlDatabase }}
+          - name: PG_PREFIX
+            value: reports_
           - name: PG_PASS
             valueFrom:
               secretKeyRef:

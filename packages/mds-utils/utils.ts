@@ -348,7 +348,10 @@ function addDistanceBearing<T extends { lat: number; lng: number }>(pt: T, dista
   const den = Math.cos(distance / R) - Math.sin(lat1) * Math.sin(lat2)
   const lng2 = lng1 + Math.atan2(num, den)
 
-  return { ...pt, lat: deg(lat2), lng: deg(lng2) }
+  return Object.assign({}, pt, {
+    lat: deg(lat2),
+    lng: deg(lng2)
+  })
 }
 
 /**

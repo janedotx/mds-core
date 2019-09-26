@@ -23,12 +23,9 @@
 import supertest from 'supertest'
 import { now } from '@mds-core/mds-utils'
 import { Device, Telemetry, VehicleEvent, VEHICLE_TYPES, PROPULSION_TYPES, VEHICLE_EVENTS } from '@mds-core/mds-types'
-import { PROVIDER_UUID, makeTelemetryStream, makeTelemetry, makeDevices } from '@mds-core/mds-test-data'
+import { PROVIDER_UUID, PROVIDER_AUTH, makeTelemetryStream, makeTelemetry, makeDevices } from '@mds-core/mds-test-data'
 import test from 'unit.js'
 import { ApiServer } from '@mds-core/mds-api-server'
-import { AccessTokenScope } from '@mds-core/mds-api-scopes'
-import cache from '@mds-core/mds-cache'
-import db from '@mds-core/mds-db'
 import log from '@mds-core/mds-logger'
 import { api } from '../api'
 import { ProviderEventProcessor } from '../event-processor'
@@ -154,25 +151,63 @@ const test_data = {
   telemetry: test_telemetry
 }
 
-const SCOPED_AUTH = (...scopes: AccessTokenScope[]) =>
-  `basic ${Buffer.from(`${PROVIDER_UUID}|${scopes.join(' ')}`).toString('base64')}`
-
 describe('Tests app', () => {
-  before('initializes the db and cache', async () => {
-    await Promise.all([db.initialize(), cache.initialize()])
+  it('initializes the db and cache', done => {
+    request
+      .get('/test/initialize')
+      .set('Authorization', PROVIDER_AUTH)
+      .expect(201)
+      .end((err, result) => {
+        test.value(result).hasHeader('content-type', APP_JSON)
+        done(err)
+      })
   })
 
-  after('Shuts down the db and cache', async () => {
-    await Promise.all([db.shutdown(), cache.shutdown()])
+  it('verifies that it can create random seed data', done => {
+    request
+      .get('/test/seed?n=10')
+      .set('Authorization', PROVIDER_AUTH)
+      .expect(201)
+      .end((err, result) => {
+        test.value(result).hasHeader('content-type', APP_JSON)
+        done(err)
+      })
   })
 
-  it('verifies event processing', async () => {
-    await Promise.all([db.seed(test_data), cache.seed(test_data)])
-    const processed = await ProviderEventProcessor({ interval: 0 })
-    test.value(processed).is(3)
+  it('initializes the db and cache (2nd pass)', done => {
+    request
+      .get('/test/initialize')
+      .set('Authorization', PROVIDER_AUTH)
+      .expect(201)
+      .end((err, result) => {
+        test.value(result).hasHeader('content-type', APP_JSON)
+        done(err)
+      })
   })
 
-  it('Get Trips (no authorization)', done => {
+  it('verifies that it can post specific seed data', done => {
+    request
+      .post('/test/seed')
+      .set('Authorization', PROVIDER_AUTH)
+      .send(test_data)
+      .expect(201)
+      .end((err, result) => {
+        test.value(result).hasHeader('content-type', APP_JSON)
+        done(err)
+      })
+  })
+
+  it('verifies event processing', done => {
+    ProviderEventProcessor({ interval: 0 }).then(
+      processed => {
+        test.value(processed).is(3)
+        done()
+      },
+      err => done(err)
+    )
+  })
+
+  it('tries to get trips without authorization', done => {
     request
       .get('/trips')
       .expect(401)
@@ -182,21 +217,10 @@ describe('Tests app', () => {
       })
   })
 
-  it('Get Trips (no scope)', done => {
+  it('verifies get all trips', done => {
     request
       .get('/trips')
-      .set('Authorization', SCOPED_AUTH())
-      .expect(403)
-      .end((err, result) => {
-        test.value(result).hasHeader('content-type', APP_JSON)
-        done(err)
-      })
-  })
-
-  it('Get Trips (all)', done => {
-    request
-      .get('/trips')
-      .set('Authorization', SCOPED_AUTH('trips:read'))
+      .set('Authorization', PROVIDER_AUTH)
       .expect(200)
       .end((err, result) => {
         test.value(result).hasHeader('content-type', APP_JSON)
@@ -208,10 +232,10 @@ describe('Tests app', () => {
       })
   })
 
-  it('Get Trips (non-existent vehicle)', done => {
+  it('verifies get trips for non-existent vehicle fails', done => {
     request
       .get('/trips?device_id=thisisnotadeviceid')
-      .set('Authorization', SCOPED_AUTH('trips:read'))
+      .set('Authorization', PROVIDER_AUTH)
       .expect(400)
       .end((err, result) => {
         test.value(result).hasHeader('content-type', APP_JSON)
@@ -220,10 +244,10 @@ describe('Tests app', () => {
       })
   })
 
-  it('Get Trips (vehicle)', done => {
+  it('verifies get trips for vehicle', done => {
     request
       .get(`/trips?device_id=${DEVICE_UUID}`)
-      .set('Authorization', SCOPED_AUTH('trips:read'))
+      .set('Authorization', PROVIDER_AUTH)
       .expect(200)
       .end((err, result) => {
         test.value(result).hasHeader('content-type', APP_JSON)
@@ -234,10 +258,10 @@ describe('Tests app', () => {
       })
   })
 
-  it('Get Trips (date range)', done => {
+  it('verifies get trips for date range', done => {
     request
       .get(`/trips?start_time=${test_trip_start.timestamp}&end_time=${test_trip_end.timestamp}`)
-      .set('Authorization', SCOPED_AUTH('trips:read'))
+      .set('Authorization', PROVIDER_AUTH)
       .expect(200)
       .end((err, result) => {
         test.value(result).hasHeader('content-type', APP_JSON)
@@ -248,31 +272,10 @@ describe('Tests app', () => {
       })
   })
 
-  it('Get Status Changes (no authorization)', done => {
+  it('verifies get all status changes', done => {
     request
       .get('/status_changes')
-      .expect(401)
-      .end((err, result) => {
-        test.value(result.text).is('Unauthorized')
-        done(err)
-      })
-  })
-
-  it('Get Status Changes (no scope)', done => {
-    request
-      .get('/status_changes')
-      .set('Authorization', SCOPED_AUTH())
-      .expect(403)
-      .end((err, result) => {
-        test.value(result).hasHeader('content-type', APP_JSON)
-        done(err)
-      })
-  })
-
-  it('Get Status Changes (all)', done => {
-    request
-      .get('/status_changes')
-      .set('Authorization', SCOPED_AUTH('status_changes:read'))
+      .set('Authorization', PROVIDER_AUTH)
       .expect(200)
       .end((err, result) => {
         test.value(result).hasHeader('content-type', APP_JSON)
@@ -284,10 +287,10 @@ describe('Tests app', () => {
       })
   })
 
-  it('Get Status Changes (ORIGINAL_TEST_TIMESTAMP)', done => {
+  it('verifies get status changes for ORIGINAL_TEST_TIMESTAMP', done => {
     request
       .get(`/status_changes?start_time=${test_trip_start.timestamp}&end_time=${test_trip_end.timestamp}`)
-      .set('Authorization', SCOPED_AUTH('status_changes:read'))
+      .set('Authorization', PROVIDER_AUTH)
       .expect(200)
       .end((err, result) => {
         log.info('----- one change:', result.body)
@@ -300,11 +303,33 @@ describe('Tests app', () => {
       })
   })
 
-  it('Get Status Changes (invalid device_id)', done => {
+  it('verifies get status change for invalid device_id', done => {
     request
       .get(`/status_changes?device_id=notavalidUUID`)
-      .set('Authorization', SCOPED_AUTH('status_changes:read'))
+      .set('Authorization', PROVIDER_AUTH)
       .expect(400)
+      .end((err, result) => {
+        test.value(result).hasHeader('content-type', APP_JSON)
+        done(err)
+      })
+  })
+
+  it('initializes the db and cache (final)', done => {
+    request
+      .get('/test/initialize')
+      .set('Authorization', PROVIDER_AUTH)
+      .expect(201)
+      .end((err, result) => {
+        test.value(result).hasHeader('content-type', APP_JSON)
+        done(err)
+      })
+  })
+
+  it('shuts down the db', done => {
+    request
+      .get('/test/shutdown')
+      .set('Authorization', PROVIDER_AUTH)
+      .expect(200)
       .end((err, result) => {
         test.value(result).hasHeader('content-type', APP_JSON)
         done(err)

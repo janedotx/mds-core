@@ -56,7 +56,6 @@ import {
   isInsideBoundingBox
 } from '@mds-core/mds-utils'
 import { AgencyApiRequest, AgencyApiResponse } from '@mds-core/mds-agency/types'
-import { checkScope } from '@mds-core/mds-api-server'
 
 function api(app: express.Express): express.Express {
   /**
@@ -67,19 +66,39 @@ function api(app: express.Express): express.Express {
       // verify presence of provider_id
       if (!(req.path.includes('/health') || req.path === '/')) {
         if (res.locals.claims) {
-          const { provider_id } = res.locals.claims
+          const { provider_id, scope } = res.locals.claims
 
-          if (!isUUID(provider_id)) {
-            await log.warn(req.originalUrl, 'invalid provider_id is not a UUID', provider_id)
-            return res.status(400).send({
-              result: `invalid provider_id ${provider_id} is not a UUID`
-            })
+          // no test access without auth
+          if (req.path.includes('/test/')) {
+            if (!scope || !scope.includes('test:all')) {
+              return res.status(403).send({
+                result: `no test access without test:all scope (${scope})`
+              })
+            }
           }
 
-          if (!isProviderId(provider_id)) {
-            return res.status(400).send({
-              result: `invalid provider_id ${provider_id} is not a known provider`
-            })
+          // no admin access without auth
+          if (req.path.includes('/admin/')) {
+            if (!scope || !scope.includes('admin:all')) {
+              return res.status(403).send({
+                result: `no admin access without admin:all scope (${scope})`
+              })
+            }
+          }
+
+          if (provider_id) {
+            if (!isUUID(provider_id)) {
+              await log.warn(req.originalUrl, 'invalid provider_id is not a UUID', provider_id)
+              return res.status(400).send({
+                result: `invalid provider_id ${provider_id} is not a UUID`
+              })
+            }
+
+            if (!isProviderId(provider_id)) {
+              return res.status(400).send({
+                result: `invalid provider_id ${provider_id} is not a known provider`
+              })
+            }
           }
 
           // stash provider_id
@@ -436,7 +455,7 @@ function api(app: express.Express): express.Express {
     vehicles: (Device & { updated?: number | null; telemetry?: Telemetry | null })[]
   }> {
     function fmt(query: { skip: number; take: number }): string {
-      const flat: { [key: string]: number } = { ...reqQuery, ...query }
+      const flat = Object.assign({}, reqQuery, query)
       let s = `${url}?`
       s += Object.keys(flat)
         .map(key => `${key}=${flat[key]}`)
@@ -1022,60 +1041,119 @@ function api(app: express.Express): express.Express {
   /**
    * Not currently in Agency spec.  Ability to read back all vehicle IDs.
    */
-  app.get(
-    pathsFor('/admin/vehicle_ids'),
-    checkScope(check => check('admin:all')),
-    async (req: AgencyApiRequest, res: AgencyApiResponse) => {
-      // read all the devices
-      const query_provider_id = req.query.provider_id
+  app.get(pathsFor('/admin/vehicle_ids'), async (req: AgencyApiRequest, res: AgencyApiResponse) => {
+    // read all the devices
+    const query_provider_id = req.query.provider_id
 
-      if (query_provider_id && !isUUID(query_provider_id)) {
-        return res.status(400).send({
-          error: 'bad_param',
-          error_description: `invalid provider_id ${query_provider_id} is not a UUID`
-        })
-      }
-
-      await log.info(query_provider_id ? providerName(query_provider_id) : null, 'get /vehicles')
-
-      const items = await db.readDeviceIds(query_provider_id)
-      const data: { [s: string]: string[] } = {}
-      const summary: { [s: string]: number } = {}
-      items.map(item => {
-        const { device_id, provider_id } = item
-        if (data[provider_id]) {
-          data[provider_id].push(device_id)
-          summary[providerName(provider_id)] += 1
-        } else {
-          data[provider_id] = [device_id]
-          summary[providerName(provider_id)] = 1
-        }
-      })
-
-      res.send({
-        result: 'success',
-        summary,
-        data
+    if (query_provider_id && !isUUID(query_provider_id)) {
+      return res.status(400).send({
+        error: 'bad_param',
+        error_description: `invalid provider_id ${query_provider_id} is not a UUID`
       })
     }
-  )
+
+    await log.info(query_provider_id ? providerName(query_provider_id) : null, 'get /vehicles')
+
+    const items = await db.readDeviceIds(query_provider_id)
+    const data: { [s: string]: string[] } = {}
+    const summary: { [s: string]: number } = {}
+    items.map(item => {
+      const { device_id, provider_id } = item
+      if (data[provider_id]) {
+        data[provider_id].push(device_id)
+        summary[providerName(provider_id)] += 1
+      } else {
+        data[provider_id] = [device_id]
+        summary[providerName(provider_id)] = 1
+      }
+    })
+
+    res.send({
+      result: 'success',
+      summary,
+      data
+    })
+  })
 
   // /////////////////// end Agency candidate endpoints ////////////////////
 
+  // ///////////////////// begin test-only endpoints ///////////////////////
+
+  app.get(pathsFor('/test/initialize'), async (req: AgencyApiRequest, res: AgencyApiResponse) => {
+    try {
+      const kind = await Promise.all([db.initialize(), cache.initialize(), stream.initialize()])
+      res.send({
+        result: `Database initialized (${kind})`
+      })
+    } catch (err) {
+      /* istanbul ignore next */
+      await log.error('initialize failed', err)
+      res.status(500).send(new ServerError())
+    }
+  })
+
+  app.get(pathsFor('/test/shutdown'), async (req: AgencyApiRequest, res: AgencyApiResponse) => {
+    try {
+      await Promise.all([cache.shutdown(), stream.shutdown(), db.shutdown()])
+      await log.info('shutdown complete (in theory)')
+      res.send({
+        result: 'cache/stream/db shutdown done'
+      })
+    } catch (err) {
+      await log.error('shutdown failed', err)
+      res.status(500).send(new ServerError())
+    }
+  })
+
+  app.get(pathsFor('/test/reset'), async (req: AgencyApiRequest, res: AgencyApiResponse) => {
+    try {
+      await cache.reset()
+      res.send({
+        result: 'cache reset done'
+      })
+    } catch (err) {
+      await log.error('cache reset failed', err)
+      res.status(500).send(new ServerError())
+    }
+  })
+
+  // read-back for test purposes
   app.get(
-    pathsFor('/admin/cache/info'),
-    checkScope(check => check('admin:all')),
+    pathsFor('/test/vehicles/:device_id/event/:timestamp'),
+    validateDeviceId,
     async (req: AgencyApiRequest, res: AgencyApiResponse) => {
-      const details = await cache.info()
-      await log.warn('cache', details)
-      res.send(details)
+      const { device_id } = req.params
+
+      const timestamp = parseInt(req.params.timestamp) || undefined
+
+      const { cached } = req.query
+
+      try {
+        if (cached) {
+          await log.info('ohai event cached')
+          const event = await cache.readEvent(device_id)
+          res.status(200).send(event)
+        } else {
+          await log.info('ohai event db')
+          const event = await db.readEvent(device_id, timestamp)
+          res.status(200).send(event)
+        }
+      } catch (err) {
+        await log.error('readEvent failed', err)
+        res.status(500).send(new ServerError())
+      }
     }
   )
+
+  app.get(pathsFor('/admin/cache/info'), async (req: AgencyApiRequest, res: AgencyApiResponse) => {
+    const details = await cache.info()
+    await log.warn('cache', details)
+    res.send(details)
+  })
 
   // wipe a device -- sandbox or admin use only
   app.get(
     pathsFor('/admin/wipe/:device_id'),
-    checkScope(check => check('admin:all')),
     validateDeviceId,
     async (req: AgencyApiRequest, res: AgencyApiResponse) => {
       try {
@@ -1120,32 +1198,53 @@ function api(app: express.Express): express.Express {
     return 'done'
   }
 
+  app.get(pathsFor('/admin/cache/refresh'), async (req: AgencyApiRequest, res: AgencyApiResponse) => {
+    // wipe the cache and rebuild from db
+    let { skip, take } = req.query
+    skip = parseInt(skip) || 0
+    take = parseInt(take) || 10000000000
+
+    try {
+      const rows = await db.readDeviceIds()
+
+      await log.info('read', rows.length, 'device_ids. skip', skip, 'take', take)
+      const devices = rows.slice(skip, take + skip)
+      await log.info('device_ids', devices)
+
+      const promises = devices.map(device => refresh(device.device_id, device.provider_id))
+      await Promise.all(promises)
+      res.send({
+        result: `success for ${devices.length} devices`
+      })
+    } catch (err) {
+      await log.error('cache refresh fail', err)
+      res.send({
+        result: 'fail'
+      })
+    }
+  })
+
+  // read-back for test purposes
   app.get(
-    pathsFor('/admin/cache/refresh'),
-    checkScope(check => check('admin:all')),
+    pathsFor('/test/vehicles/:device_id/telemetry/:timestamp'),
+    validateDeviceId,
     async (req: AgencyApiRequest, res: AgencyApiResponse) => {
-      // wipe the cache and rebuild from db
-      let { skip, take } = req.query
-      skip = parseInt(skip) || 0
-      take = parseInt(take) || 10000000000
+      const { device_id } = req.params
+
+      const timestamp = parseInt(req.params.timestamp) || undefined
 
       try {
-        const rows = await db.readDeviceIds()
-
-        await log.info('read', rows.length, 'device_ids. skip', skip, 'take', take)
-        const devices = rows.slice(skip, take + skip)
-        await log.info('device_ids', devices)
-
-        const promises = devices.map(device => refresh(device.device_id, device.provider_id))
-        await Promise.all(promises)
-        res.send({
-          result: `success for ${devices.length} devices`
-        })
+        const telemetry = await db.readTelemetry(device_id, timestamp, timestamp)
+        if (Array.isArray(telemetry) && telemetry.length > 0) {
+          res.send(telemetry[0])
+        } else {
+          res.status(404).send({
+            result: 'not found'
+          })
+        }
       } catch (err) {
-        await log.error('cache refresh fail', err)
-        res.send({
-          result: 'fail'
-        })
+        await log.info('test read telemetry error', err)
+        res.status(500).send(new ServerError())
       }
     }
   )

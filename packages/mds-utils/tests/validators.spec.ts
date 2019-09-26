@@ -74,7 +74,6 @@ describe('Tests validators', () => {
     test.assert.throws(() => isValidTimestamp(null), ValidationError)
     test.assert.throws(() => isValidTimestamp(1), ValidationError)
     test.value(isValidTimestamp('123', { assert: false })).is(false)
-    test.value(isValidTimestamp('1567695019935', { assert: false })).is(false)
     test.value(isValidTimestamp(Date.now())).is(true)
     done()
   })
@@ -138,26 +137,24 @@ describe('Tests validators', () => {
     test.assert.throws(() => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 200 } }), ValidationError)
     test.assert.throws(() => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: -200 } }), ValidationError)
     test.value(isValidTelemetry({ gps: { lat: 0, lng: 0 } }, { assert: false })).is(false)
-    test.assert.throws(() => isValidTelemetry({ timestamp: Date.now(), gps: { lat: '0', lng: 0 } }), ValidationError)
-    test.assert.throws(() => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: '0' } }), ValidationError)
     test.assert.throws(
-      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0, speed: '0' } }),
+      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0, speed: 'S' } }),
       ValidationError
     )
     test.assert.throws(
-      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0, heading: '0' } }),
+      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0, heading: 'H' } }),
       ValidationError
     )
     test.assert.throws(
-      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0, accuracy: '0' } }),
+      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0, accuracy: 'A' } }),
       ValidationError
     )
     test.assert.throws(
-      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0, altitude: '0' } }),
+      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0, altitude: 'A' } }),
       ValidationError
     )
     test.assert.throws(
-      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0 }, charge: '0' }),
+      () => isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0 }, charge: 'C' }),
       ValidationError
     )
     test.value(isValidTelemetry({ timestamp: Date.now(), gps: { lat: 0, lng: 0 } })).is(true)

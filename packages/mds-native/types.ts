@@ -14,7 +14,8 @@
     limitations under the License.
  */
 
-import { ApiRequest, ApiResponse, ApiResponseLocals } from '@mds-core/mds-api-server'
+import { ApiRequest, ApiResponse } from '@mds-core/mds-api-server'
+import { ApiAuthorizerClaims } from '@mds-core/mds-api-authorizer'
 import { UUID, VehicleEvent, Recorded, Device, Provider } from '@mds-core/mds-types'
 
 // Place newer versions at the beginning of the list
@@ -27,14 +28,15 @@ export type NativeApiRequest = ApiRequest
 
 // Allow adding type definitions for Express Response objects
 export interface NativeApiResponse<T extends NativeApiResponseBody> extends ApiResponse<T> {
-  locals: ApiResponseLocals & {
+  locals: {
+    claims: ApiAuthorizerClaims
     provider_id: UUID
   }
 }
 
 export interface NativeApiGetEventsRequest extends NativeApiRequest {
   params: {
-    cursor: string
+    cursor?: string
   }
   // Query string parameters always come in as strings
   query: Partial<
@@ -49,21 +51,21 @@ interface NativeApiResponseBody {
 }
 
 interface NativeApiGetEventsReponseBody extends NativeApiResponseBody {
-  events: Omit<Recorded<VehicleEvent>, 'id' | 'service_area_id'>[]
+  events: Omit<Recorded<VehicleEvent>, 'service_area_id'>[]
   cursor: string
 }
 
 export type NativeApiGetEventsReponse = NativeApiResponse<NativeApiGetEventsReponseBody>
 
-export interface NativeApiGetVehiclesRequest extends NativeApiRequest {
+export interface NativeApiGetDeviceRequest extends NativeApiRequest {
   params: { device_id: UUID }
 }
 
-interface NativeApiGetVehiclesResponseBody extends NativeApiResponseBody {
-  vehicle: Omit<Recorded<Device>, 'id'>
+interface NativeApiGetDeviceResponseBody extends NativeApiResponseBody {
+  device: Device
 }
 
-export type NativeApiGetVehiclesResponse = NativeApiResponse<NativeApiGetVehiclesResponseBody>
+export type NativeApiGetDeviceResponse = NativeApiResponse<NativeApiGetDeviceResponseBody>
 
 export type NativeApiGetProvidersRequest = NativeApiRequest
 

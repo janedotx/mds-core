@@ -16,6 +16,7 @@
 
 import express from 'express'
 import cache from '@mds-core/mds-cache'
+import stream from '@mds-core/mds-stream'
 import db from '@mds-core/mds-db'
 import log from '@mds-core/mds-logger'
 import {
@@ -23,6 +24,7 @@ import {
   now,
   days,
   pathsFor,
+  head,
   getPolygon,
   pointInShape,
   isInStatesOrEvents,
@@ -40,7 +42,25 @@ function api(app: express.Express): express.Express {
       // verify presence of provider_id
       if (!(req.path.includes('/health') || req.path === '/')) {
         if (res.locals.claims) {
-          const { provider_id } = res.locals.claims
+          const { provider_id, scope } = res.locals.claims
+
+          // no test access without auth
+          if (req.path.includes('/test/')) {
+            if (!scope || !scope.includes('test:all')) {
+              return res.status(403).send({
+                result: `no test access without test:all scope (${scope})`
+              })
+            }
+          }
+
+          // no admin access without auth
+          if (req.path.includes('/admin/')) {
+            if (!scope || !scope.includes('admin:all')) {
+              return res.status(403).send({
+                result: `no admin access without admin:all scope (${scope})`
+              })
+            }
+          }
 
           /* istanbul ignore next */
           if (!provider_id) {
@@ -73,6 +93,19 @@ function api(app: express.Express): express.Express {
     next()
   })
 
+  app.get(pathsFor('/test/initialize'), async (req, res) => {
+    try {
+      const kind = await Promise.all([db.initialize(), cache.initialize(), stream.initialize()])
+      res.send({
+        result: `Database initialized (${kind})`
+      })
+    } catch (err) {
+      /* istanbul ignore next */
+      await log.error('initialize failed', err)
+      res.status(500).send('Server Error')
+    }
+  })
+
   app.get(pathsFor('/snapshot/:policy_uuid'), async (req: ComplianceApiRequest, res: ComplianceApiResponse) => {
     const { provider_id } = res.locals
     const { provider_id: queried_provider_id } = req.query
@@ -80,94 +113,98 @@ function api(app: express.Express): express.Express {
     /* istanbul ignore next */
     async function fail(err: Error) {
       await log.error(err.stack || err)
-      return res.status(500).send(new ServerError())
+      res.status(500).send(new ServerError())
     }
 
     const { policy_uuid } = req.params
     const { end_date: query_end_date } = req.query
 
     if (!isUUID(policy_uuid)) {
-      return res.status(400).send({ err: 'bad_param' })
-    }
-    const { start_date, end_date } = query_end_date
-      ? { end_date: parseInt(query_end_date), start_date: parseInt(query_end_date) - days(365) }
-      : { end_date: now() + days(365), start_date: now() - days(365) }
-    try {
-      const all_policies = await db.readPolicies({ start_date })
-      const policy = compliance_engine.filterPolicies(all_policies).find(p => {
-        return p.policy_id === policy_uuid
-      })
-      if (!policy) {
-        return res.status(404).send({ err: 'not found' })
-      }
-
-      if (
-        policy &&
-        ((policy.provider_ids && policy.provider_ids.includes(provider_id)) ||
-          !policy.provider_ids ||
-          ([TEST1_PROVIDER_ID, TEST2_PROVIDER_ID, TEST4_PROVIDER_ID].includes(provider_id) &&
-            ((policy.provider_ids &&
-              policy.provider_ids.length !== 0 &&
-              policy.provider_ids.includes(queried_provider_id)) ||
-              !policy.provider_ids ||
-              policy.provider_ids.length === 0)))
-      ) {
-        const target_provider_id = [TEST1_PROVIDER_ID, TEST2_PROVIDER_ID, TEST4_PROVIDER_ID].includes(provider_id)
-          ? queried_provider_id
-          : provider_id
-        if (
-          compliance_engine
-            .filterPolicies(all_policies)
-            .map(p => p.policy_id)
-            .includes(policy.policy_id)
-        ) {
-          const [geographies, deviceRecords] = await Promise.all([
-            db.readGeographies(),
-            db.readDeviceIds(target_provider_id)
-          ])
-          const deviceIdSubset = deviceRecords.map((record: { device_id: UUID; provider_id: UUID }) => record.device_id)
-          const devices = await cache.readDevices(deviceIdSubset)
-          const events =
-            query_end_date && end_date < now()
-              ? await db.readHistoricalEvents({ provider_id: target_provider_id, end_date })
-              : await cache.readEvents(deviceIdSubset)
-
-          const deviceMap = devices.reduce((map: { [d: string]: Device }, device) => {
-            return device ? Object.assign(map, { [device.device_id]: device }) : map
-          }, {})
-
-          const filteredEvents = compliance_engine.filterEvents(events)
-          const result = compliance_engine.processPolicy(policy, filteredEvents, geographies, deviceMap)
-          if (result === undefined) {
-            return res.status(400).send({ err: 'bad_param' })
-          }
-          return res.status(200).send(result)
+      res.status(400).send({ err: 'bad_param' })
+    } else {
+      const { start_date, end_date } = query_end_date
+        ? { end_date: parseInt(query_end_date), start_date: parseInt(query_end_date) - days(365) }
+        : { end_date: now() + days(365), start_date: now() - days(365) }
+      try {
+        const all_policies = await db.readPolicies({ start_date, end_date })
+        const policy = compliance_engine.filterPolicies(all_policies).find(p => {
+          return p.policy_id === policy_uuid
+        })
+        if (!policy) {
+          res.status(404).send({ err: 'not found' })
         }
-      } else {
-        return res.status(401).send({ err: 'Unauthorized' })
+
+        if (
+          policy &&
+          ((policy.provider_ids && policy.provider_ids.includes(provider_id)) ||
+            ([TEST1_PROVIDER_ID, TEST2_PROVIDER_ID, TEST4_PROVIDER_ID].includes(provider_id) &&
+              ((policy.provider_ids &&
+                policy.provider_ids.length !== 0 &&
+                policy.provider_ids.includes(queried_provider_id)) ||
+                !policy.provider_ids ||
+                policy.provider_ids.length === 0)))
+        ) {
+          const target_provider_id = [TEST1_PROVIDER_ID, TEST2_PROVIDER_ID, TEST4_PROVIDER_ID].includes(provider_id)
+            ? queried_provider_id
+            : provider_id
+          if (
+            compliance_engine
+              .filterPolicies(all_policies)
+              .map(p => p.policy_id)
+              .includes(policy.policy_id)
+          ) {
+            const [geographies, deviceRecords] = await Promise.all([
+              db.readGeographies(),
+              db.readDeviceIds(target_provider_id)
+            ])
+            const deviceIdSubset = deviceRecords.map(
+              (record: { device_id: UUID; provider_id: UUID }) => record.device_id
+            )
+            const devices = await cache.readDevices(deviceIdSubset)
+            const events =
+              query_end_date && end_date < now()
+                ? await db.readHistoricalEvents({ provider_id: target_provider_id, end_date })
+                : await cache.readEvents(deviceIdSubset)
+
+            const deviceMap = devices.reduce((map: { [d: string]: Device }, device) => {
+              return device ? Object.assign(map, { [device.device_id]: device }) : map
+            }, {})
+
+            const filteredEvents = compliance_engine.filterEvents(events)
+            const result = compliance_engine.processPolicy(policy, filteredEvents, geographies, deviceMap)
+            if (result === undefined) {
+              res.status(400).send({ err: 'bad_param' })
+            } else {
+              res.status(200).send(result)
+            }
+          }
+        } else {
+          res.status(401).send({ err: 'Unauthorized' })
+        }
+      } catch (err) {
+        if (err.message.includes('not_found')) {
+          res.status(400).send({ err: 'bad_param' })
+        }
+        await fail(err)
       }
-    } catch (err) {
-      if (err.message.includes('not_found')) {
-        return res.status(400).send({ err: 'bad_param' })
-      }
-      await fail(err)
     }
   })
 
   app.get(pathsFor('/count/:rule_id'), async (req: ComplianceApiRequest, res: ComplianceApiResponse) => {
     if (![TEST1_PROVIDER_ID, TEST2_PROVIDER_ID, TEST4_PROVIDER_ID].includes(res.locals.provider_id)) {
-      return res.status(401).send({ result: 'unauthorized access' })
+      res.status(401).send({ result: 'unauthorized access' })
     }
 
-    async function fail(err: Error) {
+    async function fail(err: Error): Promise<void> {
       await log.error(err.stack || err)
       if (err.message.includes('invalid rule_id')) {
-        return res.status(404).send(err.message)
+        res.status(404).send(err.message)
+      } else {
+        /* istanbul ignore next */
+        res
+          .status(500)
+          .send({ error: 'server_error', error_description: 'an internal server error has occurred and been logged' })
       }
-      /* istanbul ignore next */
-      return res
-        .status(500)
-        .send({ error: 'server_error', error_description: 'an internal server error has occurred and been logged' })
     }
 
     const { rule_id } = req.params
@@ -177,12 +214,12 @@ function api(app: express.Express): express.Express {
         return [...acc, geo]
       }, [])
       const geographies = (await Promise.all(
-        geography_ids.reduce((acc: Promise<Geography>[], geography_id) => {
-          const geography = db.readSingleGeography(geography_id)
+        geography_ids.reduce((acc: Promise<Geography[]>[], geography_id) => {
+          const geography = db.readGeographies({ geography_id })
           return [...acc, geography]
         }, [])
       )).reduce((acc: Geography[], geos) => {
-        return [...acc, geos]
+        return [...acc, head(geos)]
       }, [])
 
       const polys = geographies.reduce((acc: (Geometry | FeatureCollection)[], geography) => {
@@ -204,7 +241,7 @@ function api(app: express.Express): express.Express {
         )
       }, 0)
 
-      return res.status(200).send({ count })
+      res.status(200).send({ count })
     } catch (err) {
       await fail(err)
     }

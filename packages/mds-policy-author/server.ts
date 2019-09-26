@@ -16,9 +16,9 @@ import { ApiServer } from '@mds-core/mds-api-server'
 import { api } from './api'
 
 const {
-  env: { npm_package_name, PORT = 4007 }
+  env: { npm_package_name, PORT = 4003 }
 } = process
 
 /* eslint-reason avoids import of logger */
 /* eslint-disable-next-line no-console */
-ApiServer(api, { handleCors: true }).listen(PORT, () => console.log(`${npm_package_name} running on port ${PORT}`))
+ApiServer(api).listen(PORT, () => console.log(`${npm_package_name} running on port ${PORT}`))

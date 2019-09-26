@@ -66,16 +66,12 @@ import { DISTRICT_SEVEN } from './district-seven'
 
 const GEOGRAPHY_UUID = '1f943d59-ccc9-4d91-b6e2-0c5e771cbc49'
 const GEOGRAPHY2_UUID = '722b99ca-65c2-4ed6-9be1-056c394fadbf'
-const NONEXISTENT_GEOGRAPHY_UUID = '991d4062-6e5e-4ac1-bcd1-1a3bd6d7f63c'
 
 const POLICY_UUID = '72971a3d-876c-41ea-8e48-c9bb965bbbcc'
 const POLICY2_UUID = '5681364c-2ebf-4ba2-9ca0-50f4be2a5876'
 const POLICY3_UUID = '42d899b8-255d-4109-aa67-abfb9157b46a'
-const POLICY4_UUID = 'de15243e-dfaa-4a88-b21a-db7cd2c3dc78'
-const POLICY_JSON_MISSING_POLICY_ID_UUID = 'e5ddf6ec-8b45-42ec-a1b5-b72e24644e1c'
-const SUPERSEDING_POLICY_UUID = 'd6371e73-6a8c-4b51-892f-78849d66ee2b'
 
-const PROVIDER_SCOPES = 'admin:all'
+const PROVIDER_SCOPES = 'admin:all test:all'
 
 // for test purposes
 const PROVIDER_AUTH =
@@ -102,7 +98,7 @@ const START_YESTERDAY = now() - (now() % days(1))
 
 const POLICY_JSON: Policy = {
   // TODO guts
-  name: 'Policy 1',
+  name: 'LADOT Mobility Caps',
   description: 'Mobility caps as described in the One-Year Permit',
   policy_id: POLICY_UUID,
   start_date: START_YESTERDAY,
@@ -123,36 +119,13 @@ const POLICY_JSON: Policy = {
   ]
 }
 
-const SUPERSEDING_POLICY_JSON: Policy = {
-  // TODO guts
-  name: 'Supersedes Policy 1',
-  description: 'Mobility caps as described in the One-Year Permit',
-  policy_id: SUPERSEDING_POLICY_UUID,
-  start_date: START_YESTERDAY,
-  end_date: null,
-  prev_policies: [POLICY_UUID],
-  provider_ids: [],
-  rules: [
-    {
-      rule_type: 'count',
-      rule_id: 'f518e886-ec06-4eb9-ad19-d91d34ee73d3',
-      name: 'Greater LA',
-      geographies: [GEOGRAPHY_UUID],
-      statuses: { available: [], unavailable: [], reserved: [], trip: [] },
-      vehicle_types: [VEHICLE_TYPES.bicycle, VEHICLE_TYPES.scooter],
-      maximum: 1000,
-      minimum: 500
-    }
-  ]
-}
-
 const START_ONE_MONTH_AGO = now() - (now() % days(1)) - days(30)
 const START_ONE_WEEK_AGO = now() - (now() % days(1)) - days(7)
 
 // in the past
 const POLICY2_JSON: Policy = {
   // TODO guts
-  name: 'Policy 2',
+  name: 'Idle Times',
   description: 'LADOT Idle Time Limitations',
   policy_id: POLICY2_UUID,
   start_date: START_ONE_MONTH_AGO,
@@ -189,8 +162,8 @@ const START_ONE_MONTH_FROM_NOW = now() - (now() % days(1)) + days(30)
 const POLICY3_JSON: Policy = {
   // TODO guts
   policy_id: POLICY3_UUID,
-  name: 'Policy 3',
-  description: 'LADOT Pilot Speed Limit Limitations From the Future',
+  name: 'Speed Limits',
+  description: 'LADOT Pilot Speed Limit Limitations',
   start_date: START_ONE_MONTH_FROM_NOW,
   end_date: null,
   prev_policies: null,
@@ -222,50 +195,6 @@ const POLICY3_JSON: Policy = {
         'en-US': 'Remember to stay under 10 MPH on Venice Beach on weekends!',
         'es-US': '¡Recuerda permanecer menos de 10 millas por hora en Venice Beach los fines de semana!'
       }
-    }
-  ]
-}
-
-const POLICY4_JSON: Policy = {
-  // TODO guts
-  policy_id: POLICY4_UUID,
-  name: 'Policy 4',
-  description: 'LADOT Pilot Speed Limit Limitations',
-  start_date: now(),
-  end_date: null,
-  prev_policies: null,
-  provider_ids: [],
-  rules: [
-    {
-      name: 'Greater LA',
-      rule_id: 'bfd790d3-87d6-41ec-afa0-98fa443ee0d3',
-      rule_type: 'speed',
-      rule_units: 'mph',
-      geographies: [GEOGRAPHY_UUID],
-      statuses: { trip: [] },
-      vehicle_types: [VEHICLE_TYPES.bicycle, VEHICLE_TYPES.scooter],
-      maximum: 25
-    }
-  ]
-}
-
-const POLICY_JSON_MISSING_POLICY_ID = {
-  name: 'I have no identity woe is me',
-  description: 'LADOT Pilot Speed Limit Limitations',
-  start_date: now(),
-  end_date: null,
-  prev_policies: null,
-  provider_ids: [],
-  rules: [
-    {
-      name: 'Greater LA',
-      rule_id: 'bfd790d3-87d6-41ec-afa0-98fa443ee0d3',
-      rule_type: 'speed',
-      rule_units: 'mph',
-      geographies: [NONEXISTENT_GEOGRAPHY_UUID],
-      statuses: { trip: [] },
-      vehicle_types: [VEHICLE_TYPES.bicycle, VEHICLE_TYPES.scooter],
-      maximum: 25
     }
   ]
 }
@@ -383,10 +312,10 @@ function makeTelemetryStream(origin: Telemetry, steps: number) {
   }
 
   const stream: Telemetry[] = []
-  let t = { ...origin } as Telemetry & { gps: { heading: number } }
+  let t = Object.assign({}, origin) as Telemetry & { gps: { heading: number } }
   Object.assign(t.gps, origin.gps)
   range(steps).map(() => {
-    t = { ...t }
+    t = Object.assign({}, t)
     // move 50m in whatever the bearing is
     t.gps = addDistanceBearing(t.gps, 50, t.gps.heading)
     // turn 5º
@@ -562,15 +491,10 @@ export {
   JUMP_TEST_DEVICE_1,
   JUMP_PROVIDER_ID,
   POLICY_JSON,
-  SUPERSEDING_POLICY_JSON,
   POLICY2_JSON,
   POLICY3_JSON,
-  POLICY4_JSON,
-  POLICY_JSON_MISSING_POLICY_ID,
   POLICY_UUID,
-  SUPERSEDING_POLICY_UUID,
   POLICY2_UUID,
-  POLICY3_UUID,
   GEOGRAPHY_UUID,
   GEOGRAPHY2_UUID,
   START_ONE_MONTH_AGO,

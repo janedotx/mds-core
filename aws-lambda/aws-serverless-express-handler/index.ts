@@ -61,7 +61,7 @@ export const AwsServerlessExpressHandler = (
   })
 
   const server = awsServerlessExpress.createServer(
-    ApiServer(api, { authorizer: ApiGatewayAuthorizer }, express().use(awsServerlessExpressMiddleware.eventContext()))
+    ApiServer(api, ApiGatewayAuthorizer, express().use(awsServerlessExpressMiddleware.eventContext()))
   )
 
   return async (event, context) => {

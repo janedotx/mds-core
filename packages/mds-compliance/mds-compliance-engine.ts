@@ -213,7 +213,7 @@ function processPolicy(
 ): ComplianceResponse | undefined {
   if (isPolicyActive(policy)) {
     const vehiclesToFilter: MatchedVehicle[] = []
-    let overflowVehiclesMap: { [key: string]: MatchedVehicle & { rule_id: UUID } } = {}
+    let overflowVehiclesMap: { [key: string]: boolean } = {}
     const compliance: Compliance[] = policy.rules.reduce((compliance_acc: Compliance[], rule: Rule): Compliance[] => {
       vehiclesToFilter.forEach((vehicle: MatchedVehicle) => {
         /* eslint-reason need to remove matched vehicles */
@@ -236,24 +236,23 @@ function processPolicy(
           }
 
           const bucketMap = comp.matches.reduce(
-            (acc2: { matched: MatchedVehicle[]; overflowed: (MatchedVehicle & { rule_id: UUID })[] }[], match) => {
+            (acc2: { matched: MatchedVehicle[]; overflowed: MatchedVehicle[] }[], match) => {
               return [
                 ...acc2,
                 match.matched_vehicles.reduce(
                   (
-                    acc: { matched: MatchedVehicle[]; overflowed: (MatchedVehicle & { rule_id: UUID })[] },
+                    acc: { matched: MatchedVehicle[]; overflowed: MatchedVehicle[] },
                     match_instance: MatchedVehicle,
                     i: number
                   ) => {
-                    // If the rule has a defined maximum, use it, even if 0
-                    const maximum = rule.maximum == null ? Number.POSITIVE_INFINITY : rule.maximum
+                    const maximum = rule.maximum || Number.POSITIVE_INFINITY
                     if (maximum && i < maximum) {
                       if (overflowVehiclesMap[match_instance.device_id]) {
                         delete overflowVehiclesMap[match_instance.device_id]
                       }
                       acc.matched.push(match_instance)
                     } else {
-                      acc.overflowed.push({ ...match_instance, rule_id: rule.rule_id })
+                      acc.overflowed.push(match_instance)
                     }
                     return acc
                   },
@@ -268,23 +267,17 @@ function processPolicy(
             return [...acc, ...map.matched]
           }, [])
 
-          const overflowVehicles = bucketMap.reduce((acc: (MatchedVehicle & { rule_id: UUID })[], map) => {
+          const overflowVehicles = bucketMap.reduce((acc: MatchedVehicle[], map) => {
             return [...acc, ...map.overflowed]
           }, [])
 
           vehiclesToFilter.push(...vehiclesMatched)
           overflowVehiclesMap = {
             ...overflowVehiclesMap,
-            ...overflowVehicles.reduce(
-              (
-                acc: { [key: string]: MatchedVehicle & { rule_id: UUID } },
-                device: MatchedVehicle & { rule_id: UUID }
-              ) => {
-                acc[device.device_id] = device
-                return acc
-              },
-              {}
-            )
+            ...overflowVehicles.reduce((acc: { [key: string]: boolean }, device: MatchedVehicle) => {
+              acc[device.device_id] = true
+              return acc
+            }, {})
           }
 
           compliance_acc.push(compressedComp)
@@ -311,18 +304,7 @@ function processPolicy(
       }
       return compliance_acc
     }, [])
-
-    const overflowedVehicles = Object.keys(overflowVehiclesMap).map(device_id => {
-      const { rule_id } = overflowVehiclesMap[device_id]
-      return { device_id, rule_id }
-    })
-
-    return {
-      policy,
-      compliance,
-      total_violations: overflowedVehicles.length,
-      vehicles_in_violation: overflowedVehicles
-    }
+    return { policy, compliance, total_violations: Object.keys(overflowVehiclesMap).length }
   }
 }
 

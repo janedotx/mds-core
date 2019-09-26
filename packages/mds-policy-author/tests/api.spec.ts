@@ -26,22 +26,19 @@
 import should from 'should'
 import supertest from 'supertest'
 import test from 'unit.js'
-import db from '@mds-core/mds-db'
 import { clone } from '@mds-core/mds-utils'
 import { Policy } from '@mds-core/mds-types'
 import { ApiServer } from '@mds-core/mds-api-server'
-import { TEST1_PROVIDER_ID, TEST3_PROVIDER_ID } from '@mds-core/mds-providers'
-
+import { TEST1_PROVIDER_ID } from '@mds-core/mds-providers'
+import db from '@mds-core/mds-db'
 import {
   POLICY_JSON,
   POLICY2_JSON,
   POLICY3_JSON,
-  POLICY4_JSON,
-  SUPERSEDING_POLICY_JSON,
   POLICY_UUID,
   POLICY2_UUID,
   GEOGRAPHY_UUID,
-  GEOGRAPHY2_UUID,
+  PROVIDER_SCOPES,
   LA_CITY_BOUNDARY,
   DISTRICT_SEVEN
 } from '@mds-core/mds-test-data'
@@ -56,42 +53,63 @@ const APP_JSON = 'application/json; charset=utf-8'
 
 // TODO
 // change the auth token/authing system so it uses agency_id instead of provider_id
-const AUTH_NON_PROVIDER = `basic ${Buffer.from(`'BOGUS_PROVIDER_ID_TO_BE_REPLACED'`).toString('base64')}`
-const AUTH_PROVIDER_ONLY = `basic ${Buffer.from(`${TEST1_PROVIDER_ID}`).toString('base64')}`
-const AUTH_BAD_PROVIDER_ONLY = `basic ${Buffer.from(`${TEST3_PROVIDER_ID}`).toString('base64')}`
+const AUTH_NON_PROVIDER = `basic ${Buffer.from(`'BOGUS_PROVIDER_ID_TO_BE_REPLACED'|${PROVIDER_SCOPES}`).toString(
+  'base64'
+)}`
+const AUTH_ADMIN_ONLY = `basic ${Buffer.from(`${TEST1_PROVIDER_ID}|${'admin:all'}`).toString('base64')}`
 
 describe('Tests app', () => {
-  describe('Policy tests', () => {
-    before(async () => {
-      await db.initialize()
-    })
-
-    after(async () => {
-      await db.shutdown()
-    })
-
-    it('does not authenticate a provider who is not approved', done => {
-      const policy = POLICY_JSON
+  describe('Test basic housekeeping', () => {
+    it('resets the db', done => {
       request
-        .post(`/policies`)
-        .set('Authorization', AUTH_BAD_PROVIDER_ONLY)
-        .send(policy)
-        .expect(401)
+        .get('/test/initialize')
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .expect(200)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
           done(err)
         })
     })
 
-    it('does not authenticate a provider_id that is invalid', done => {
-      const policy = POLICY_JSON
+    it('verifies unable to access test if not scoped', done => {
       request
-        .post(`/policies`)
-        .set('Authorization', AUTH_NON_PROVIDER)
-        .send(policy)
-        .expect(400)
+        .get('/test/')
+        .set('Authorization', AUTH_ADMIN_ONLY)
+        .expect(403)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
+          test.string(result.body.result).contains('no test access without test:all scope')
+          done(err)
+        })
+    })
+
+    it('shuts things down', done => {
+      request
+        .get('/test/shutdown')
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .expect(200)
+        .end((err, result) => {
+          test.value(result).hasHeader('content-type', APP_JSON)
+          done(err)
+        })
+    })
+  })
+
+  describe('Policy tests', () => {
+    before(done => {
+      request
+        .get('/test/initialize')
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .end(err => {
+          done(err)
+        })
+    })
+
+    after(done => {
+      request
+        .get('/test/shutdown')
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .end(err => {
           done(err)
         })
     })
@@ -101,8 +119,8 @@ describe('Tests app', () => {
       delete bad_policy_json.rules[0].rule_type
       const bad_policy = bad_policy_json
       request
-        .post(`/policies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(bad_policy)
         .expect(400)
         .end((err, result) => {
@@ -113,11 +131,11 @@ describe('Tests app', () => {
         })
     })
 
-    it('verifies cannot PUT non-existent policy', done => {
-      const policy = clone(POLICY_JSON)
+    it('verifies cannot PUT non-existant policy', done => {
+      const policy = POLICY_JSON
       request
-        .put(`/policies/d2e31798-f22f-4034-ad36-1f88621b276a`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .put(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(policy)
         .expect(404)
         .end((err, result) => {
@@ -129,10 +147,10 @@ describe('Tests app', () => {
     it('creates one current policy', done => {
       const policy = POLICY_JSON
       request
-        .post(`/policies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(policy)
-        .expect(201)
+        .expect(200)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
           done(err)
@@ -142,8 +160,8 @@ describe('Tests app', () => {
     it('verifies cannot POST duplicate policy', done => {
       const policy = POLICY_JSON
       request
-        .post(`/policies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(policy)
         .expect(409)
         .end((err, result) => {
@@ -157,8 +175,8 @@ describe('Tests app', () => {
       delete bad_policy_json.rules[0].rule_type
       const bad_policy = bad_policy_json
       await request
-        .put(`/policies/${POLICY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .put(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(bad_policy)
         .expect(400)
     })
@@ -167,8 +185,8 @@ describe('Tests app', () => {
       const policy = clone(POLICY_JSON)
       policy.name = 'a shiny new name'
       await request
-        .put(`/policies/${POLICY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .put(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(policy)
         .expect(200)
 
@@ -179,10 +197,10 @@ describe('Tests app', () => {
     it('creates one past policy', done => {
       const policy2 = POLICY2_JSON
       request
-        .post(`/policies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(policy2)
-        .expect(201)
+        .expect(200)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
           done(err)
@@ -193,10 +211,10 @@ describe('Tests app', () => {
       // TODO guts
       const policy3 = POLICY3_JSON
       request
-        .post(`/policies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(policy3)
-        .expect(201)
+        .expect(200)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
           done(err)
@@ -205,8 +223,8 @@ describe('Tests app', () => {
 
     it('verifies cannot publish a policy with missing geographies', done => {
       request
-        .post(`/policies/${POLICY_JSON.policy_id}/publish`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${POLICY_JSON.policy_id}/publish`)
+        .set('Authorization', AUTH_ADMIN_ONLY)
         .expect(404)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
@@ -216,8 +234,8 @@ describe('Tests app', () => {
 
     it('verifies cannot publish a policy that was never POSTed', done => {
       request
-        .post(`/policies/${GEOGRAPHY_UUID}/publish`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${GEOGRAPHY_UUID}/publish`)
+        .set('Authorization', AUTH_ADMIN_ONLY)
         .expect(404)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
@@ -228,10 +246,10 @@ describe('Tests app', () => {
     it('creates one current geography', done => {
       const geography = { geography_id: GEOGRAPHY_UUID, geography_json: LA_CITY_BOUNDARY }
       request
-        .post(`/geographies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/geographies/${GEOGRAPHY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(geography)
-        .expect(201)
+        .expect(200)
         .end((err, result) => {
           const body = result.body
           log('create one geo response:', body)
@@ -242,8 +260,8 @@ describe('Tests app', () => {
 
     it('can publish a policy', done => {
       request
-        .post(`/policies/${POLICY_JSON.policy_id}/publish`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${POLICY_JSON.policy_id}/publish`)
+        .set('Authorization', AUTH_ADMIN_ONLY)
         .expect(200)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
@@ -253,8 +271,8 @@ describe('Tests app', () => {
 
     it('cannot double-publish a policy', done => {
       request
-        .post(`/policies/${POLICY_JSON.policy_id}/publish`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/${POLICY_JSON.policy_id}/publish`)
+        .set('Authorization', AUTH_ADMIN_ONLY)
         .expect(409)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
@@ -266,8 +284,8 @@ describe('Tests app', () => {
       const policy = clone(POLICY_JSON)
       policy.name = 'an even shinier new name'
       request
-        .put(`/policies/${POLICY_JSON.policy_id}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .put(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_ADMIN_ONLY)
         .send(policy)
         .expect(409)
         .end((err, result) => {
@@ -278,66 +296,57 @@ describe('Tests app', () => {
 
     it('can delete an unpublished policy', done => {
       request
-        .delete(`/policies/${POLICY2_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .delete(`/admin/policies/${POLICY2_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .expect(200)
         .end(async (err, result) => {
           const body = result.body
-          log('read back nonexistent policy response:', body)
+          log('read back nonexistant policy response:', body)
           test.value(result).hasHeader('content-type', APP_JSON)
-          await db.readPolicies({ policy_id: POLICY2_UUID }).should.be.fulfilledWith([])
+          await db.readPolicies({ policy_id: POLICY2_UUID }).should.be.rejected()
           done(err)
         })
     })
 
     it('cannot delete a published policy', done => {
       request
-        .delete(`/policies/${POLICY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .delete(`/admin/policies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .expect(404)
         .end(err => {
           done(err)
         })
     })
 
-    it('verifies PUTing policy metadata to create', async () => {
+    it('verifies POSTing policy metadata', done => {
       const metadata = { some_arbitrary_thing: 'boop' }
-      await request
-        .put(`/policies/${POLICY_UUID}/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .send({ policy_id: POLICY_UUID, policy_metadata: metadata })
-        .expect(201)
-      const result = await db.readSinglePolicyMetadata(POLICY_UUID)
-      test.assert(result.policy_metadata.some_arbitrary_thing === 'boop')
-    })
-
-    it('verifies PUTing policy metadata to edit', async () => {
-      const metadata = { some_arbitrary_thing: 'beep' }
-      await request
-        .put(`/policies/${POLICY_UUID}/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .send({ policy_id: POLICY_UUID, policy_metadata: metadata })
-        .expect(200)
-      const result = await db.readSinglePolicyMetadata(POLICY_UUID)
-      test.assert(result.policy_metadata.some_arbitrary_thing === 'beep')
-    })
-
-    it('verifies GETing policy metadata when given a policy_id', done => {
       request
-        .get(`/policies/${POLICY_UUID}/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/policies/meta/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .send(metadata)
         .expect(200)
         .end((err, result) => {
-          test.assert(result.body.policy_metadata.some_arbitrary_thing === 'beep')
           test.value(result).hasHeader('content-type', APP_JSON)
           done(err)
         })
     })
 
-    it('verifies cannot GET non-existent policy metadata', done => {
+    it('verifies GETing policy metadata', done => {
       request
-        .get(`/policies/beepbapboop/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .get(`/admin/policies/meta/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .expect(200)
+        .end((err, result) => {
+          test.assert(result.body.some_arbitrary_thing === 'boop')
+          test.value(result).hasHeader('content-type', APP_JSON)
+          done(err)
+        })
+    })
+
+    it('verifies cannot GET non-existant policy metadata', done => {
+      request
+        .get(`/admin/policies/meta/beepbapboop`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .expect(404)
         .end((err, result) => {
           test.assert(result.body.result === 'not found')
@@ -345,118 +354,34 @@ describe('Tests app', () => {
           done(err)
         })
     })
-
-    it('verifies GETting policy metadata with the same params as for bulk policy reads', async () => {
-      const result = await request
-        .get(`/policies/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(200)
-      test.assert(result.body.length === 1)
-      test.value(result).hasHeader('content-type', APP_JSON)
-    })
-
-    it('can GET a single policy', done => {
-      request
-        .get(`/policies/${POLICY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(200)
-        .end(async (err, result) => {
-          test.assert(result.body.policy_id === POLICY_UUID)
-          test.assert(result.body.description === POLICY_JSON.description)
-          done(err)
-        })
-    })
-
-    it('cannot GET a single nonexistent policy', done => {
-      request
-        .get(`/policies/544d36c4-29f5-4088-a52f-7c9a64d5874c`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(404)
-        .end(async err => {
-          done(err)
-        })
-    })
-    /*
-  it('read back one geography', async () => {
-    await db.writeGeography({ geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary })
-    request
-      .get(`/geographies/${GEOGRAPHY_UUID}`)
-      .set('Authorization', AUTH)
-      .expect(200)
-      .end((err, result) => {
-        const body = result.body
-        log('read back one geo response:', body)
-        test.value(result).hasHeader('content-type', APP_JSON)
-        // TODO verify contents
-        return err
-      })
-  })
-  */
-
-    it('can GET all active policies', async () => {
-      await db.writeGeography({ geography_id: GEOGRAPHY2_UUID, geography_json: DISTRICT_SEVEN })
-      await db.writePolicy(POLICY4_JSON)
-      await db.writePolicy(SUPERSEDING_POLICY_JSON)
-      await db.publishPolicy(SUPERSEDING_POLICY_JSON.policy_id)
-      request
-        .get(`/policies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(200)
-        .end(async (policies_err, policies_result) => {
-          test.assert(policies_result.body.length === 4)
-          return policies_err
-        })
-    })
-
-    it('can GET all published policies', done => {
-      request
-        .get(`/policies?get_published=true`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(200)
-        .end(async (policies_err, policies_result) => {
-          test.assert(policies_result.body.length === 2)
-          done(policies_err)
-        })
-    })
-
-    it('can GET all unpublished policies', done => {
-      request
-        .get(`/policies?get_unpublished=true`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(200)
-        .end(async (policies_err, policies_result) => {
-          test.assert(policies_result.body.length === 2)
-          done(policies_err)
-        })
-    })
-
-    it('throws an exception if both get_unpublished and get_published are submitted', done => {
-      request
-        .get(`/policies?get_unpublished=true&get_published=true`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(400)
-        .end(async policies_err => {
-          done(policies_err)
-        })
-    })
   })
 
   describe('Geography endpoint tests', () => {
-    before(async () => {
-      await db.initialize()
+    before(done => {
+      request
+        .get('/test/initialize')
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .end(err => {
+          done(err)
+        })
     })
 
-    after(async () => {
-      await db.shutdown()
+    after(done => {
+      request
+        .get('/test/shutdown')
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .end(err => {
+          done(err)
+        })
     })
 
     it('creates one current geography', done => {
       const geography = { geography_id: GEOGRAPHY_UUID, geography_json: LA_CITY_BOUNDARY }
       request
-        .post(`/geographies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/geographies/${GEOGRAPHY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(geography)
-        .expect(201)
+        .expect(200)
         .end((err, result) => {
           const body = result.body
           log('create one geo response:', body)
@@ -465,79 +390,48 @@ describe('Tests app', () => {
         })
     })
 
-    it('GETs one current geography', done => {
-      request
-        .get(`/geographies/${GEOGRAPHY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(200)
-        .end((err, result) => {
-          test.assert(result.body.geography_id === GEOGRAPHY_UUID)
-          test.value(result).hasHeader('content-type', APP_JSON)
-          done(err)
-        })
-    })
-
-    it('cannot GET a nonexistent geography', done => {
-      request
-        .get(`/geographies/${POLICY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(404)
-        .end(err => {
-          done(err)
-        })
-    })
-
     it('verifies updating one geography', done => {
       const geography = { geography_id: GEOGRAPHY_UUID, geography_json: DISTRICT_SEVEN }
       request
-        .put(`/geographies/${GEOGRAPHY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .put(`/admin/geographies/${GEOGRAPHY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(geography)
-        .expect(201)
+        .expect(200)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
           done(err)
         })
     })
 
-    it('verifies PUTing geography metadata to create', async () => {
+    it('verifies POSTing geography metadata', done => {
       const metadata = { some_arbitrary_thing: 'boop' }
-      await request
-        .put(`/geographies/${GEOGRAPHY_UUID}/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .send({ geography_id: GEOGRAPHY_UUID, geography_metadata: metadata })
-        .expect(201)
-      const result = await db.readSingleGeographyMetadata(GEOGRAPHY_UUID)
-      test.assert(result.geography_metadata.some_arbitrary_thing === 'boop')
-    })
-
-    it('verifies PUTing geography metadata to edit', async () => {
-      const metadata = { some_arbitrary_thing: 'beep' }
-      await request
-        .put(`/geographies/${GEOGRAPHY_UUID}/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .send({ geography_id: GEOGRAPHY_UUID, geography_metadata: metadata })
+      request
+        .post(`/admin/geographies/meta/${GEOGRAPHY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
+        .send(metadata)
         .expect(200)
-      const result = await db.readSingleGeographyMetadata(GEOGRAPHY_UUID)
-      test.assert(result.geography_metadata.some_arbitrary_thing === 'beep')
+        .end((err, result) => {
+          test.value(result).hasHeader('content-type', APP_JSON)
+          done(err)
+        })
     })
 
     it('verifies GETing geography metadata', done => {
       request
-        .get(`/geographies/${GEOGRAPHY_UUID}/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .get(`/admin/geographies/meta/${GEOGRAPHY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .expect(200)
         .end((err, result) => {
-          test.assert(result.body.geography_metadata.some_arbitrary_thing === 'beep')
+          test.assert(result.body.some_arbitrary_thing === 'boop')
           test.value(result).hasHeader('content-type', APP_JSON)
           done(err)
         })
     })
 
-    it('verifies cannot GET non-existent geography metadata', done => {
+    it('verifies cannot GET non-existant geography metadata', done => {
       request
-        .get(`/geographies/beepbapboop/meta`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .get(`/admin/geographies/meta/beepbapboop`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .expect(404)
         .end((err, result) => {
           test.assert(result.body.result === 'not found')
@@ -549,8 +443,8 @@ describe('Tests app', () => {
     it('verifies cannot PUT bad geography', done => {
       const geography = { geography_id: GEOGRAPHY_UUID, geography_json: 'garbage_json' }
       request
-        .put(`/geographies/${GEOGRAPHY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .put(`/admin/geographies/${GEOGRAPHY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(geography)
         .expect(400)
         .end((err, result) => {
@@ -559,11 +453,11 @@ describe('Tests app', () => {
         })
     })
 
-    it('verifies cannot PUT non-existent geography', done => {
+    it('verifies cannot PUT non-existant geography', done => {
       const geography = { geography_id: POLICY_UUID, geography_json: DISTRICT_SEVEN }
       request
-        .put(`/geographies/${POLICY_UUID}`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .put(`/admin/geographies/${POLICY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(geography)
         .expect(404)
         .end((err, result) => {
@@ -575,8 +469,8 @@ describe('Tests app', () => {
     it('verifies cannot POST invalid geography', done => {
       const geography = { geography_id: GEOGRAPHY_UUID, geography_json: 'garbage_json' }
       request
-        .post(`/geographies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/geographies/${GEOGRAPHY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(geography)
         .expect(400)
         .end((err, result) => {
@@ -588,26 +482,14 @@ describe('Tests app', () => {
     it('cannot POST duplicate geography', done => {
       const geography = { geography_id: GEOGRAPHY_UUID, geography_json: LA_CITY_BOUNDARY }
       request
-        .post(`/geographies`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
+        .post(`/admin/geographies/${GEOGRAPHY_UUID}`)
+        .set('Authorization', AUTH_NON_PROVIDER)
         .send(geography)
         .expect(409)
         .end((err, result) => {
           test.value(result).hasHeader('content-type', APP_JSON)
           done(err)
         })
-    })
-
-    it('can do bulk geography metadata reads', async () => {
-      await db.writeGeography({ geography_id: GEOGRAPHY2_UUID, geography_json: DISTRICT_SEVEN })
-      await db.writeGeographyMetadata({ geography_id: GEOGRAPHY2_UUID, geography_metadata: { earth: 'isround' } })
-
-      const result = await request
-        .get(`/geographies/meta?get_read_only=false`)
-        .set('Authorization', AUTH_PROVIDER_ONLY)
-        .expect(200)
-      test.assert(result.body.length === 2)
-      test.value(result).hasHeader('content-type', APP_JSON)
     })
   })
 })

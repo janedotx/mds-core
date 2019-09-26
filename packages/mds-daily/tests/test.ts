@@ -34,9 +34,7 @@ import cache from '@mds-core/mds-cache'
 import { makeDevices } from '@mds-core/mds-test-data'
 import { ApiServer } from '@mds-core/mds-api-server'
 import { TEST1_PROVIDER_ID } from '@mds-core/mds-providers'
-import Sinon from 'sinon'
-import { agencyMiddleware, api } from '../api'
-import { dbHelperFail } from '../request-handlers'
+import { api } from '../api'
 
 /* eslint-disable-next-line no-console */
 const log = console.log.bind(console)
@@ -49,7 +47,7 @@ function now(): Timestamp {
 
 const APP_JSON = 'application/json; charset=utf-8'
 
-const PROVIDER_SCOPES = 'admin:all'
+const PROVIDER_SCOPES = 'admin:all test:all'
 const DEVICE_UUID = 'ec551174-f324-4251-bfed-28d9f3f473fc'
 const TRIP_UUID = '1f981864-cc17-40cf-aea3-70fd985e2ea7'
 const TEST_TELEMETRY: Telemetry = {
@@ -152,8 +150,14 @@ before(done => {
   })
 })
 
-after(async () => {
-  await Promise.all([db.shutdown(), cache.shutdown()])
+after(done => {
+  request
+    .get('/test/shutdown')
+    .set('Authorization', AUTH)
+    .expect(200)
+    .end(err => {
+      done(err)
+    })
 })
 
 describe('Tests API', () => {
@@ -167,49 +171,6 @@ describe('Tests API', () => {
         test.value(result).hasHeader('content-type', APP_JSON)
         done(err)
       })
-  })
-
-  describe('Agency-specific middleware', () => {
-    it('calls next()', async () => {
-      const nextSpy = Sinon.spy()
-      /* eslint-disable @typescript-eslint/no-explicit-any */
-      await agencyMiddleware(
-        {
-          // skip most of the middleware body with /health path
-          path: '/health'
-        } as any,
-        {} as any,
-        nextSpy
-      )
-      /* eslint-enable @typescript-eslint/no-explicit-any */
-      test.assert(nextSpy.calledOnce)
-    })
-
-    it('rejects an unauthorized user', async () => {
-      const statusSpy = Sinon.spy(statusCode => {
-        return {
-          send: () => {
-            return statusCode
-          }
-        }
-      })
-      /* eslint-disable @typescript-eslint/no-explicit-any */
-      await agencyMiddleware(
-        {
-          // follow main code path & do auth logic
-          path: '/foobar'
-        } as any,
-        {
-          locals: {} /* leave claims undefined */,
-          status: statusSpy
-        } as any,
-        () => {
-          return null
-        }
-      )
-      /* eslint-enable @typescript-eslint/no-explicit-any */
-      test.assert(statusSpy.calledOnceWithExactly(401))
-    })
   })
 
   it('verifies 8 total events, and 4 are non-conformant', done => {
@@ -255,10 +216,5 @@ describe('Tests API', () => {
         // providerTestObject1.hasProperty('num_telemetry')
         done(err)
       })
-  })
-
-  it('handles a db helper failure', async () => {
-    await dbHelperFail(new Error('fake-error'))
-    await dbHelperFail('fake-error-string')
   })
 })

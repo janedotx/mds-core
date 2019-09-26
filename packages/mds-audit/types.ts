@@ -15,7 +15,8 @@
  */
 
 import { UUID, Telemetry, Timestamp, Audit } from '@mds-core/mds-types'
-import { ApiRequest, ApiResponse, ApiResponseLocals } from '@mds-core/mds-api-server'
+import { ApiAuthorizerClaims } from '@mds-core/mds-api-authorizer'
+import { ApiRequest, ApiResponse } from '@mds-core/mds-api-server'
 
 // Allow adding type definitions for Express Request objects
 export type AuditApiRequest = ApiRequest
@@ -96,7 +97,8 @@ export interface AuditApiGetTripRequest extends AuditApiTripRequest {
 
 // Allow adding type definitions for Express Response objects
 export interface AuditApiResponse<T = {}> extends ApiResponse<T> {
-  locals: ApiResponseLocals & {
+  locals: {
+    claims: ApiAuthorizerClaims
     audit_subject_id: string
     audit_trip_id: UUID
     audit: Audit | null

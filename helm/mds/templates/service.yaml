@@ -9,7 +9,13 @@ spec:
   selector:
     app: {{ $api.name }}
   ports:
+<<<<<<< Updated upstream:helm/mds/templates/service.yaml
   -
     name: http-{{ $api.name }}
     port: {{ $api.port }}
+=======
+  - name: http-{{ $api.name }}
+    port: 80
+    targetPort: {{ $api.port }}
+>>>>>>> Stashed changes:charts/mds/templates/service.yaml
 {{- end }}

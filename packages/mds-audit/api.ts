@@ -17,6 +17,8 @@
 import express from 'express'
 import uuid from 'uuid'
 import log from '@mds-core/mds-logger'
+import db from '@mds-core/mds-db'
+import cache from '@mds-core/mds-cache'
 import urls from 'url'
 import {
   pathsFor,
@@ -41,7 +43,7 @@ import {
 import { providerName } from '@mds-core/mds-providers' // map of uuids -> obj
 import { AUDIT_EVENT_TYPES, AuditEvent, TelemetryData, Timestamp, Telemetry, AuditDetails } from '@mds-core/mds-types'
 import { asPagingParams, asJsonApiLinks } from '@mds-core/mds-api-helpers'
-import { checkScope } from '@mds-core/mds-api-server'
+import { verifyAccessScope } from '@mds-core/mds-api-server'
 import {
   AuditApiAuditEndRequest,
   AuditApiAuditNoteRequest,
@@ -93,26 +95,40 @@ function api(app: express.Express): express.Express {
    * NOTE that audit will be city-facing only, not Providers.
    */
   app.use(async (req: AuditApiRequest, res: AuditApiResponse, next) => {
-    if (!(req.path.includes('/health') || req.path === '/')) {
-      if (res.locals.claims) {
-        // verify presence of subject_id
-        const { principalId, user_email } = res.locals.claims
-        const subject_id = user_email || principalId
+    // CORS, because we are webby, not machine-to-machine
+    res.header('Access-Control-Allow-Origin', '*')
 
-        /* istanbul ignore if */
-        if (subject_id) {
+    /* istanbul ignore if */
+    if (req.method === 'OPTIONS') {
+      res.header('Access-Control-Allow-Methods', 'OPTIONS, GET, POST, DELETE')
+      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization')
+      // 200 OK
+      res.sendStatus(200)
+    } else {
+      try {
+        if (!req.path.includes('/health' || req.path === '/')) {
+          // verify presence of subject_id
+          const { principalId, email } = res.locals.claims
+          const subject_id = email || principalId
+
+          /* istanbul ignore if */
+          if (!subject_id) {
+            await log.warn('Missing subject_id in', req.originalUrl)
+            // 403 Forbidden
+            return res.status(403).send({ error: new AuthorizationError('missing_subject_id') })
+          }
+
           // stash audit_subject_id and timestamp (for recording db writes)
           res.locals.audit_subject_id = subject_id
           res.locals.recorded = Date.now()
+
           log.info(subject_id, req.method, req.originalUrl)
-          return next()
         }
+      } catch (err) /* istanbul ignore next */ {
+        await log.error(req.originalUrl, 'request validation fail:', err.stack)
       }
-      await log.warn('Missing subject_id', req.method, req.originalUrl)
-      // 403 Forbidden
-      return res.status(403).send({ error: new AuthorizationError('missing_subject_id') })
+      next()
     }
-    return next()
   })
 
   /**
@@ -125,17 +141,53 @@ function api(app: express.Express): express.Express {
         res.locals.audit_trip_id = audit_trip_id
         res.locals.audit = await readAudit(audit_trip_id)
       }
-      return next()
+      next()
     } catch (err) /* istanbul ignore next */ {
       if (err instanceof ValidationError) {
         // 400 Bad Request
-        return res.status(400).send({ error: err })
+        res.status(400).send({ error: err })
+      } else {
+        // 500 Internal Server Error
+        await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
+        res.status(500).send({ error: new ServerError(err) })
       }
-      // 500 Internal Server Error
-      await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-      return res.status(500).send({ error: new ServerError(err) })
     }
   })
+
+  // ///////////////////// begin test-only endpoints ///////////////////////
+
+  app.get(
+    pathsFor('/test/initialize'),
+    verifyAccessScope('test:all'),
+    async (req: AuditApiRequest, res: AuditApiResponse) => {
+      try {
+        const kind = await db.initialize()
+        const result = `Database initialized (${kind})`
+        await log.info(result)
+        // 200 OK
+        res.status(200).send({ result })
+      } catch (err) /* istanbul ignore next */ {
+        // 500 Internal Server Error
+        await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
+        res.status(500).send({ error: new ServerError(err) })
+      }
+    }
+  )
+
+  app.get(
+    pathsFor('/test/shutdown'),
+    verifyAccessScope('test:all'),
+    async (req: AuditApiRequest, res: AuditApiResponse) => {
+      await db.shutdown()
+      await cache.shutdown()
+      await log.info('shutdown complete (in theory)')
+      // 200 OK
+      res.status(200).send({
+        result: 'db shutdown'
+      })
+    }
+  )
+  // ///////////////////// end test-only endpoints ///////////////////////
 
   // /////////////////// begin audit-only endpoints //////////////////////
 
@@ -143,84 +195,81 @@ function api(app: express.Express): express.Express {
    * initiate an audit
    * @param {UUID} audit_trip_id unique ID of this audit record (client-generated)
    */
-  app.post(
-    pathsFor('/trips/:audit_trip_id/start'),
-    checkScope(check => check('audits:write')),
-    async (req: AuditApiAuditStartRequest, res: AuditApiResponse) => {
-      try {
-        const { audit_trip_id, audit, audit_subject_id, recorded } = res.locals
+  app.post(pathsFor('/trips/:audit_trip_id/start'), async (req: AuditApiAuditStartRequest, res: AuditApiResponse) => {
+    try {
+      const { audit_trip_id, audit, audit_subject_id, recorded } = res.locals
 
-        if (!audit) {
-          const {
-            timestamp,
-            provider_id,
-            provider_vehicle_id,
-            audit_event_id = uuid(),
+      if (!audit) {
+        const {
+          timestamp,
+          provider_id,
+          provider_vehicle_id,
+          audit_event_id = uuid(),
+          audit_device_id,
+          telemetry
+        } = req.body
+
+        // Validate input params
+        if (
+          isValidTimestamp(timestamp) &&
+          isValidProviderId(provider_id) &&
+          isValidProviderVehicleId(provider_vehicle_id) &&
+          isValidAuditEventId(audit_event_id) &&
+          isValidAuditDeviceId(audit_device_id) &&
+          isValidTelemetry(telemetry, { required: false })
+        ) {
+          // Find provider device by vehicle id lookup
+          const provider_device = await readDeviceByVehicleId(provider_id, provider_vehicle_id)
+          const provider_device_id = provider_device ? provider_device.device_id : null
+          const provider_name = providerName(provider_id)
+
+          // Create the audit
+          await writeAudit({
+            audit_trip_id,
             audit_device_id,
-            telemetry
-          } = req.body
+            audit_subject_id,
+            provider_id,
+            provider_name,
+            provider_vehicle_id,
+            provider_device_id,
+            timestamp,
+            recorded
+          })
 
-          // Validate input params
-          if (
-            isValidTimestamp(timestamp) &&
-            isValidProviderId(provider_id) &&
-            isValidProviderVehicleId(provider_vehicle_id) &&
-            isValidAuditEventId(audit_event_id) &&
-            isValidAuditDeviceId(audit_device_id) &&
-            isValidTelemetry(telemetry, { required: false })
-          ) {
-            // Find provider device by vehicle id lookup
-            const provider_device = await readDeviceByVehicleId(provider_id, provider_vehicle_id)
-            const provider_device_id = provider_device ? provider_device.device_id : null
-            const provider_name = providerName(provider_id)
+          // Create the audit start event
+          await writeAuditEvent({
+            audit_trip_id,
+            audit_event_id,
+            audit_subject_id,
+            audit_event_type: AUDIT_EVENT_TYPES.start,
+            ...flattenTelemetry(telemetry),
+            timestamp,
+            recorded
+          })
 
-            // Create the audit
-            await writeAudit({
-              audit_trip_id,
-              audit_device_id,
-              audit_subject_id,
-              provider_id,
-              provider_name,
-              provider_vehicle_id,
-              provider_device_id,
-              timestamp,
-              recorded
-            })
-
-            // Create the audit start event
-            await writeAuditEvent({
-              audit_trip_id,
-              audit_event_id,
-              audit_subject_id,
-              audit_event_type: AUDIT_EVENT_TYPES.start,
-              ...flattenTelemetry(telemetry),
-              timestamp,
-              recorded
-            })
-
-            // 200 OK
-            return res.status(200).send({
-              provider_id,
-              provider_name,
-              provider_vehicle_id,
-              provider_device
-            })
-          }
-        } else {
-          // 409 Conflict
-          return res.status(409).send({ error: new ConflictError('audit_trip_id_already_exists', { audit_trip_id }) })
+          // 200 OK
+          res.status(200).send({
+            provider_id,
+            provider_name,
+            provider_vehicle_id,
+            provider_device
+          })
         }
-      } catch (err) /* istanbul ignore next */ {
-        if (err instanceof ValidationError) {
-          // 400 Bad Request
-          return res.status(400).send({ error: err })
-        }
+      } else {
+        // 409 Conflict
+        res.status(409).send({ error: new ConflictError('audit_trip_id_already_exists', { audit_trip_id }) })
+      }
+    } catch (err) /* istanbul ignore next */ {
+      if (err instanceof ValidationError) {
+        // 400 Bad Request
+        res.status(400).send({ error: err })
+      } else {
         // 500 Internal Server Error
         await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-        return res.status(500).send({ error: new ServerError(err) })
+        res.status(500).send({ error: new ServerError(err) })
       }
     }
-  )
+  })
 
   /**
    * add an event to an audit
@@ -229,7 +278,6 @@ function api(app: express.Express): express.Express {
    */
   app.post(
     pathsFor('/trips/:audit_trip_id/vehicle/event'),
-    checkScope(check => check('audits:write')),
     async (req: AuditApiVehicleEventRequest, res: AuditApiResponse) => {
       try {
         const { audit_trip_id, audit_subject_id, audit, recorded } = res.locals
@@ -255,20 +303,21 @@ function api(app: express.Express): express.Express {
             })
 
             // 200 OK
-            return res.status(200).send({})
+            res.status(200).send({})
           }
         } else {
           // 404 Not Found
-          return res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
+          res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
         }
       } catch (err) /* istanbul ignore next */ {
         if (err instanceof ValidationError) {
           // 400 Bad Request
-          return res.status(400).send({ error: err })
+          res.status(400).send({ error: err })
+        } else {
+          // 500 Internal Server Error
+          await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
+          res.status(500).send({ error: new ServerError(err) })
         }
-        // 500 Internal Server Error
-        await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-        return res.status(500).send({ error: new ServerError(err) })
       }
     }
   )
@@ -279,7 +328,6 @@ function api(app: express.Express): express.Express {
    */
   app.post(
     pathsFor('/trips/:audit_trip_id/vehicle/telemetry'),
-    checkScope(check => check('audits:write')),
     async (req: AuditApiVehicleTelemetryRequest, res: AuditApiResponse) => {
       try {
         const { audit_trip_id, audit_subject_id, audit, recorded } = res.locals
@@ -301,20 +349,21 @@ function api(app: express.Express): express.Express {
             })
 
             // 200 OK
-            return res.status(200).send({})
+            res.status(200).send({})
           }
         } else {
           // 404 Not Found
-          return res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
+          res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
         }
       } catch (err) /* istanbul ignore next */ {
         if (err instanceof ValidationError) {
           // 400 Bad Request
-          return res.status(400).send({ error: err })
+          res.status(400).send({ error: err })
+        } else {
+          // 500 Internal Server Error
+          await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
+          res.status(500).send({ error: new ServerError(err) })
         }
-        // 500 Internal Server Error
-        await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-        return res.status(500).send({ error: new ServerError(err) })
       }
     }
   )
@@ -325,7 +374,6 @@ function api(app: express.Express): express.Express {
    */
   app.post(
     [...pathsFor('/trips/:audit_trip_id/note'), ...pathsFor('/trips/:audit_trip_id/event')],
-    checkScope(check => check('audits:write')),
     async (req: AuditApiAuditNoteRequest, res: AuditApiResponse) => {
       try {
         const { audit_trip_id, audit, audit_subject_id, recorded } = res.locals
@@ -367,20 +415,21 @@ function api(app: express.Express): express.Express {
             })
 
             // 200 OK
-            return res.status(200).send({})
+            res.status(200).send({})
           }
         } else {
           // 404 Not Found
-          return res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
+          res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
         }
       } catch (err) /* istanbul ignore next */ {
         if (err instanceof ValidationError) {
           // 400 Bad Request
-          return res.status(400).send({ error: err })
+          res.status(400).send({ error: err })
+        } else {
+          // 500 Internal Server Error
+          await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
+          res.status(500).send({ error: new ServerError(err) })
         }
-        // 500 Internal Server Error
-        await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-        return res.status(500).send({ error: new ServerError(err) })
       }
     }
   )
@@ -389,51 +438,48 @@ function api(app: express.Express): express.Express {
    * terminate an audit
    * @param {UUID} audit_trip_id unique ID of this audit record (client-generated)
    */
-  app.post(
-    pathsFor('/trips/:audit_trip_id/end'),
-    checkScope(check => check('audits:write')),
-    async (req: AuditApiAuditEndRequest, res: AuditApiResponse) => {
-      try {
-        const { audit_trip_id, audit, audit_subject_id, recorded } = res.locals
-        if (audit) {
-          const { audit_event_id = uuid(), timestamp, telemetry } = req.body
+  app.post(pathsFor('/trips/:audit_trip_id/end'), async (req: AuditApiAuditEndRequest, res: AuditApiResponse) => {
+    try {
+      const { audit_trip_id, audit, audit_subject_id, recorded } = res.locals
+      if (audit) {
+        const { audit_event_id = uuid(), timestamp, telemetry } = req.body
 
-          // Validate input params
-          if (
-            isValidAuditEventId(audit_event_id) &&
-            isValidAuditEventId(audit_event_id) &&
-            isValidTimestamp(timestamp) &&
-            isValidTelemetry(telemetry, { required: false })
-          ) {
-            // Create the audit end event
-            await writeAuditEvent({
-              audit_trip_id,
-              audit_event_id,
-              audit_subject_id,
-              audit_event_type: AUDIT_EVENT_TYPES.end,
-              ...flattenTelemetry(telemetry),
-              timestamp,
-              recorded
-            })
+        // Validate input params
+        if (
+          isValidAuditEventId(audit_event_id) &&
+          isValidAuditEventId(audit_event_id) &&
+          isValidTimestamp(timestamp) &&
+          isValidTelemetry(telemetry, { required: false })
+        ) {
+          // Create the audit end event
+          await writeAuditEvent({
+            audit_trip_id,
+            audit_event_id,
+            audit_subject_id,
+            audit_event_type: AUDIT_EVENT_TYPES.end,
+            ...flattenTelemetry(telemetry),
+            timestamp,
+            recorded
+          })
 
-            // 200 OK
-            return res.status(200).send({})
-          }
-        } else {
-          // 404 Not Found
-          return res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
+          // 200 OK
+          res.status(200).send({})
         }
-      } catch (err) /* istanbul ignore next */ {
-        if (err instanceof ValidationError) {
-          // 400 Bad Request
-          return res.status(400).send({ error: err })
-        }
+      } else {
+        // 404 Not Found
+        res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
+      }
+    } catch (err) /* istanbul ignore next */ {
+      if (err instanceof ValidationError) {
+        // 400 Bad Request
+        res.status(400).send({ error: err })
+      } else {
         // 500 Internal Server Error
         await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-        return res.status(500).send({ error: new ServerError(err) })
+        res.status(500).send({ error: new ServerError(err) })
       }
     }
-  )
+  })
 
   /**
    * read back an audit record
@@ -441,7 +487,6 @@ function api(app: express.Express): express.Express {
    */
   app.get(
     pathsFor('/trips/:audit_trip_id'),
-    checkScope(check => check('audits:read')),
     async (req: AuditApiGetTripRequest, res: AuditApiResponse<AuditDetails>) => {
       try {
         const { audit_trip_id, audit } = res.locals
@@ -493,7 +538,7 @@ function api(app: express.Express): express.Express {
               const deviceEvents = await readEvents(device.device_id, start_time, end_time)
               const deviceTelemetry = await readTelemetry(device.device_id, start_time, end_time)
 
-              return res.status(200).send({
+              res.status(200).send({
                 ...audit,
                 provider_vehicle_id: device.vehicle_id,
                 events: auditEvents.map(withGpsProperty),
@@ -503,90 +548,88 @@ function api(app: express.Express): express.Express {
                   telemetry: deviceTelemetry
                 }
               })
+            } else {
+              res.status(200).send({
+                ...audit,
+                events: auditEvents.map(withGpsProperty),
+                provider: { device, events: [], telemetry: [] }
+              })
             }
-            return res.status(200).send({
-              ...audit,
-              events: auditEvents.map(withGpsProperty),
-              provider: { device, events: [], telemetry: [] }
-            })
+          } else {
+            res.status(200).send({ ...audit, events: auditEvents.map(withGpsProperty), provider: null })
           }
-          return res.status(200).send({ ...audit, events: auditEvents.map(withGpsProperty), provider: null })
+        } else {
+          // 404 Not Found
+          res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
         }
-        // 404 Not Found
-        return res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
       } catch (err) /* istanbul ignore next */ {
         if (err instanceof ValidationError) {
           // 400 Bad Request
-          return res.status(400).send({ error: err })
+          res.status(400).send({ error: err })
+        } else {
+          // 500 Internal Server Error
+          await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
+          res.status(500).send({ error: new ServerError(err) })
         }
-        // 500 Internal Server Error
-        await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-        return res.status(500).send({ error: new ServerError(err) })
       }
     }
   )
 
-  app.delete(
-    pathsFor('/trips/:audit_trip_id'),
-    checkScope(check => check('audits:delete')),
-    async (req: AuditApiTripRequest, res: AuditApiResponse) => {
-      try {
-        const { audit_trip_id, audit } = res.locals
-        if (audit) {
-          // Delete the audit
-          await deleteAudit(audit_trip_id)
-          // 200 OK
-          return res.status(200).send({})
-        }
+  app.delete(pathsFor('/trips/:audit_trip_id'), async (req: AuditApiTripRequest, res: AuditApiResponse) => {
+    try {
+      const { audit_trip_id, audit } = res.locals
+      if (audit) {
+        // Delete the audit
+        await deleteAudit(audit_trip_id)
+        // 200 OK
+        res.status(200).send({})
+      } else {
         // 404 Not Found
-        return res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
-      } catch (err) /* istanbul ignore next */ {
-        if (err instanceof ValidationError) {
-          // 400 Bad Request
-          return res.status(400).send({ error: err })
-        }
+        res.status(404).send({ error: new NotFoundError('audit_trip_id_not_found', { audit_trip_id }) })
+      }
+    } catch (err) /* istanbul ignore next */ {
+      if (err instanceof ValidationError) {
+        // 400 Bad Request
+        res.status(400).send({ error: err })
+      } else {
         // 500 Internal Server Error
         await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-        return res.status(500).send({ error: new ServerError(err) })
+        res.status(500).send({ error: new ServerError(err) })
       }
     }
-  )
+  })
 
   /**
    * read back multiple audit records
    */
-  app.get(
-    pathsFor('/trips'),
-    checkScope(check => check('audits:read')),
-    async (req: AuditApiGetTripsRequest, res: AuditApiResponse) => {
-      try {
-        const { start_time, end_time } = req.query
-        const { skip, take } = asPagingParams(req.query)
+  app.get(pathsFor('/trips'), async (req: AuditApiGetTripsRequest, res: AuditApiResponse) => {
+    try {
+      const { start_time, end_time } = req.query
+      const { skip, take } = asPagingParams(req.query)
 
-        // Construct the query params
-        const query = {
-          ...req.query,
-          skip,
-          take,
-          start_time: start_time ? Number(start_time) : undefined,
-          end_time: end_time ? Number(end_time) : undefined
-        }
-
-        // Query the audits
-        const { count, audits } = await readAudits(query)
-
-        // 200 OK
-        return res.status(200).send({ count, audits, links: asJsonApiLinks(req, skip, take, count) })
-      } catch (err) /* istanbul ignore next */ {
-        // 500 Internal Server Error
-        await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
-        return res.status(500).send({ error: new ServerError(err) })
+      // Construct the query params
+      const query = {
+        ...req.query,
+        skip,
+        take,
+        start_time: start_time ? Number(start_time) : undefined,
+        end_time: end_time ? Number(end_time) : undefined
       }
-    }
-  )
 
-  app.get(pathsFor('/vehicles'), checkScope(check => check('audits:vehicles:read')), async (req, res) => {
-    const { skip, take } = { skip: 0, take: 10000 }
+      // Query the audits
+      const { count, audits } = await readAudits(query)
+
+      // 200 OK
+      res.status(200).send({ count, audits, links: asJsonApiLinks(req, skip, take, count) })
+    } catch (err) /* istanbul ignore next */ {
+      // 500 Internal Server Error
+      await log.error(`fail ${req.method} ${req.originalUrl}`, err.stack || JSON.stringify(err))
+      res.status(500).send({ error: new ServerError(err) })
+    }
+  })
+
+  app.get(pathsFor('/vehicles'), async (req, res) => {
+    const { skip, take } = asPagingParams(req.query)
     const bbox = JSON.parse(req.query.bbox)
 
     const url = urls.format({
@@ -599,10 +642,10 @@ function api(app: express.Express): express.Express {
 
     try {
       const response = await getVehicles(skip, take, url, provider_id, req.query, bbox)
-      return res.status(200).send(response)
+      res.status(200).send(response)
     } catch (err) {
       await log.error('getVehicles fail', err)
-      return res.status(500).send({
+      res.status(500).send({
         error: 'server_error',
         error_description: 'an internal server error has occurred and been logged'
       })

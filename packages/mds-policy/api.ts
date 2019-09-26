@@ -20,7 +20,7 @@ import Joi from '@hapi/joi'
 import joiToJsonSchema from 'joi-to-json-schema'
 import { Policy, UUID, VEHICLE_TYPES, DAYS_OF_WEEK } from '@mds-core/mds-types'
 import db from '@mds-core/mds-db'
-import { now, pathsFor, NotFoundError, isUUID } from '@mds-core/mds-utils'
+import { now, pathsFor, ServerError } from '@mds-core/mds-utils'
 import log from '@mds-core/mds-logger'
 import { PolicyApiRequest, PolicyApiResponse } from './types'
 
@@ -34,23 +34,42 @@ function api(app: express.Express): express.Express {
       // verify presence of provider_id
       if (!(req.path.includes('/health') || req.path === '/' || req.path === '/schema/policy')) {
         if (res.locals.claims) {
+          const { scope } = res.locals.claims
+
+          // no test access without auth
+          if (req.path.includes('/test/')) {
+            if (!scope || !scope.includes('test:all')) {
+              return res.status(403).send({ result: `no test access without test:all scope (${scope})` })
+            }
+          }
+
+          // no admin access without auth
+          if (req.path.includes('/admin/')) {
+            if (!scope || !scope.includes('admin:all')) {
+              /* istanbul ignore next */
+              return res.status(403).send({ result: `no admin access without admin:all scope (${scope})` })
+            }
+          }
+
           /* TEMPORARILY REMOVING SO NON-PROVIDERS CAN ACCESS POLICY API */
-          // const { provider_id } = res.locals.claims
           // /* istanbul ignore next */
           // if (!provider_id) {
           //   await log.warn('Missing provider_id in', req.originalUrl)
           //   return res.status(400).send({ result: 'missing provider_id' })
           // }
+
           // /* istanbul ignore next */
           // if (!isUUID(provider_id)) {
           //   await log.warn(req.originalUrl, 'bogus provider_id', provider_id)
           //   return res.status(400).send({ result: `invalid provider_id ${provider_id} is not a UUID` })
           // }
+
           // if (!isProviderId(provider_id)) {
           //   return res.status(400).send({
           //     result: `invalid provider_id ${provider_id} is not a known provider`
           //   })
           // }
+
           // log.info(providerName(provider_id), req.method, req.originalUrl)
         } else {
           return res.status(401).send('Unauthorized')
@@ -66,14 +85,14 @@ function api(app: express.Express): express.Express {
   app.get(pathsFor('/policies'), async (req, res) => {
     // TODO extract start/end applicability
     // TODO filter by start/end applicability
-    const { start_date = now(), end_date = now() } = req.query
+    const { start_date = now(), end_date = now(), unpublished: get_unpublished = false } = req.query
     log.info('read /policies', req.query, start_date, end_date)
     if (start_date > end_date) {
       res.status(400).send({ result: 'start_date after end_date' })
       return
     }
     try {
-      const policies = await db.readPolicies({ get_published: true })
+      const policies = await db.readPolicies({ start_date, end_date, get_unpublished })
       const prev_policies: UUID[] = policies.reduce((prev_policies_acc: UUID[], policy: Policy) => {
         if (policy.prev_policies) {
           prev_policies_acc.push(...policy.prev_policies)
@@ -96,32 +115,29 @@ function api(app: express.Express): express.Express {
 
   app.get(pathsFor('/policies/:policy_id'), async (req, res) => {
     const { policy_id } = req.params
-    if (!isUUID(policy_id)) {
-      res.status(400).send({ error: 'bad_param' })
-    }
     try {
-      const policy = await db.readPolicy(policy_id)
-      res.status(200).send(policy)
-    } catch (err) {
-      await log.error('failed to read one policy', err)
-      if (err instanceof NotFoundError) {
-        res.status(404).send({ result: 'not found' })
+      const policies = await db.readPolicies({ policy_id })
+      if (policies.length > 0) {
+        res.status(200).send(policies[0])
       } else {
-        res.status(500).send({ result: 'something else went wrong' })
+        res.status(404).send({ result: 'not found' })
       }
+    } catch (err) {
+      res.status(404).send({ result: 'not found' })
     }
   })
 
   app.get(pathsFor('/geographies/:geography_id'), async (req, res) => {
     log.info('read geo', JSON.stringify(req.params))
     const { geography_id } = req.params
-    if (!isUUID(geography_id)) {
-      res.status(400).send({ error: 'bad_param' })
-    }
     log.info('read geo', geography_id)
     try {
-      const geography = await db.readSingleGeography(geography_id)
-      res.status(200).send({ geography })
+      const geographies = await db.readGeographies({ geography_id })
+      if (geographies.length > 0) {
+        res.status(200).send({ geography: geographies[0] })
+      } else {
+        res.status(404).send({ result: 'not found' })
+      }
     } catch (err) {
       res.status(404).send({ result: 'not found' })
     }
@@ -184,6 +200,24 @@ function api(app: express.Express): express.Express {
 
   app.get(pathsFor('/schema/policy'), (req, res) => {
     res.status(200).send(joiToJsonSchema(policySchema))
+  })
+
+  app.get(pathsFor('/test/initialize'), async (req, res) => {
+    try {
+      const kind = await Promise.all([db.initialize()])
+      res.send({
+        result: `Policy initialized (${kind})`
+      })
+    } catch (err) {
+      await log.error('initialize failed', err)
+      res.status(500).send(new ServerError())
+    }
+  })
+
+  app.get(pathsFor('/test/shutdown'), async (req, res) => {
+    await Promise.all([db.shutdown()])
+    log.info('shutdown complete (in theory)')
+    res.send({ result: 'cache/stream/db shutdown done' })
   })
 
   return app

@@ -1,9 +1,13 @@
+<<<<<<< Updated upstream:helm/mds/templates/egress.yaml
 {{- if (eq .Values.postgresql.internal false) }}
+=======
+{{- if .Values.postgresql.host }}
+>>>>>>> Stashed changes:charts/mds/templates/egress.yaml
 apiVersion: networking.istio.io/v1alpha3
 kind: ServiceEntry
 metadata:
   name: pg-rw-external
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $.Release.Namespace }}
 spec:
   hosts:
   - {{ $.Values.postgresql.host }}
@@ -18,7 +22,7 @@ apiVersion: networking.istio.io/v1alpha3
 kind: ServiceEntry
 metadata:
   name: pg-ro-external
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $.Release.Namespace }}
 spec:
   hosts:
   - {{ $.Values.postgresql.hostReader }}
@@ -30,17 +34,21 @@ spec:
 ---
 {{- end }}
 {{- end }}
+<<<<<<< Updated upstream:helm/mds/templates/egress.yaml
 {{- if (eq .Values.redis.internal false) }}
+=======
+{{- if .Values.redis.host }}
+>>>>>>> Stashed changes:charts/mds/templates/egress.yaml
 apiVersion: networking.istio.io/v1alpha3
 kind: ServiceEntry
 metadata:
   name: redis-external
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $.Release.Namespace }}
 spec:
   hosts:
-  - {{ .Values.redis.host }}
+  - {{ $.Values.redis.host }}
   ports:
-  - number: {{ .Values.redis.port }}
+  - number: {{ $.Values.redis.port }}
     name: tcp
     protocol: TCP
   location: MESH_EXTERNAL
@@ -51,12 +59,12 @@ apiVersion: networking.istio.io/v1alpha3
 kind: ServiceEntry
 metadata:
   name: fluentbit-output
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $.Release.Namespace }}
 spec:
   hosts:
-  - {{ .Values.fluentbit.backend.es.host }}
+  - {{ $.Values.fluentbit.backend.es.host }}
   ports:
-  - number: {{ .Values.fluentbit.backend.es.port }}
+  - number: {{ $.Values.fluentbit.backend.es.port }}
     name: https
     protocol: HTTPS
   location: MESH_EXTERNAL

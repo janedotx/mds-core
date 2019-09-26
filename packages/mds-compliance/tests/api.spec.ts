@@ -5,13 +5,19 @@
 /* eslint-disable promise/catch-or-return */
 /* eslint-disable promise/prefer-await-to-callbacks */
 /* eslint-disable @typescript-eslint/no-floating-promises */
-import { makeDevices, makeEventsWithTelemetry, makeTelemetryInArea, PROVIDER_UUID } from '@mds-core/mds-test-data'
+import {
+  PROVIDER_AUTH,
+  makeDevices,
+  makeEventsWithTelemetry,
+  makeTelemetryInArea,
+  PROVIDER_UUID
+} from '@mds-core/mds-test-data'
 
 import test from 'unit.js'
 import { api as agency } from '@mds-core/mds-agency'
+import { api as provider } from '@mds-core/mds-provider'
 import cache from '@mds-core/mds-cache'
 import db from '@mds-core/mds-db'
-import stream from '@mds-core/mds-stream'
 import supertest from 'supertest'
 import { now } from '@mds-core/mds-utils'
 import {
@@ -35,8 +41,9 @@ import { api } from '../api'
 
 const request = supertest(ApiServer(api))
 const agency_request = supertest(ApiServer(agency))
+const provider_request = supertest(ApiServer(provider))
 
-const PROVIDER_SCOPES = 'admin:all'
+const PROVIDER_SCOPES = 'admin:all test:all'
 const PROVIDER_AUTH_2 = `basic ${Buffer.from(`${TEST2_PROVIDER_ID}|${PROVIDER_SCOPES}`).toString('base64')}`
 const PROVIDER_AUTH_5 = `basic ${Buffer.from(`${TEST5_PROVIDER_ID}|${PROVIDER_SCOPES}`).toString('base64')}`
 const TRIP_UUID = '1f981864-cc17-40cf-aea3-70fd985e2ea7'
@@ -66,6 +73,8 @@ const TEST_TELEMETRY = {
 
 process.env.TIMEZONE = 'America/Los_Angeles'
 const ADMIN_AUTH = `basic ${Buffer.from(`${TEST1_PROVIDER_ID}|${PROVIDER_SCOPES}`).toString('base64')}`
+const AUTH_ADMIN_ONLY_SCOPE = `basic ${Buffer.from(`${TEST1_PROVIDER_ID}|admin:all`).toString('base64')}`
+const AUTH_TEST_ONLY_SCOPE = `basic ${Buffer.from(`${TEST1_PROVIDER_ID}|test:all`).toString('base64')}`
 const TEST_VEHICLE = {
   device_id: DEVICE_UUID,
   provider_id: TEST1_PROVIDER_ID,
@@ -191,31 +200,6 @@ const COUNT_POLICY_JSON_4: Policy = {
   ]
 }
 
-const COUNT_POLICY_JSON_5: Policy = {
-  name: 'Prohibited Dockless Zones',
-  rules: [
-    {
-      name: 'Prohibited Dockless Zones',
-      maximum: 0,
-      rule_id: '8ad39dc3-005b-4348-9d61-c830c54c161b',
-      statuses: {
-        trip: [],
-        reserved: [],
-        available: []
-      },
-      rule_type: 'count',
-      geographies: ['c0591267-bb6a-4f28-a612-ff7f4a8f8b2a'],
-      vehicle_types: ['bicycle', 'scooter']
-    }
-  ],
-  end_date: null,
-  policy_id: '25851571-b53f-4426-a033-f375be0e7957',
-  start_date: 1552678594428,
-  description:
-    'Prohibited areas for dockless vehicles within the City of Los Angeles for the LADOT Dockless On-Demand Personal Mobility Program',
-  prev_policies: null
-}
-
 const TIME_POLICY_UUID = 'a2c9a65f-fd85-463e-9564-fc95ea473f7d'
 
 const TIME_POLICY_JSON: Policy = {
@@ -242,42 +226,84 @@ const TIME_POLICY_JSON: Policy = {
 
 const APP_JSON = 'application/json; charset=utf-8'
 describe('Tests Compliance API:', () => {
-  afterEach(async () => {
-    await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
+  afterEach(done => {
+    agency_request
+      .get('/test/shutdown')
+      .set('Authorization', ADMIN_AUTH)
+      .expect(200)
+      .end(err => {
+        done(err)
+      })
+  })
+
+  describe('Misc DB Tests: ', () => {
+    it('verifies unable to access test if not scoped', done => {
+      request
+        .get('/test/')
+        .set('Authorization', AUTH_ADMIN_ONLY_SCOPE)
+        .expect(403)
+        .end((err, result) => {
+          test.value(result).hasHeader('content-type', APP_JSON)
+          test.string(result.body.result).contains('no test access without test:all scope')
+          done(err)
+        })
+    })
+
+    it('verifies unable to access admin if not scoped', done => {
+      request
+        .get('/admin/')
+        .set('Authorization', AUTH_TEST_ONLY_SCOPE)
+        .expect(403)
+        .end((err, result) => {
+          test.value(result).hasHeader('content-type', APP_JSON)
+          test.string(result.body.result).contains('no admin access without admin:all scope')
+          done(err)
+        })
+    })
   })
 
   describe('Singular Policy API Sanity Checks: ', () => {
     beforeEach(done => {
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
-        agency_request
-          .post('/vehicles')
-          .set('Authorization', ADMIN_AUTH)
-          .send(TEST_VEHICLE)
-          .expect(201)
-          .end(() => {
-            agency_request
-              .post(`/vehicles/${DEVICE_UUID}/event`)
-              .set('Authorization', ADMIN_AUTH)
-              .send({
-                event_type: 'trip_start',
-                trip_id: TRIP_UUID,
-                telemetry: TEST_TELEMETRY,
-                timestamp: testTimestamp++
-              })
-              .expect(201)
-              .end(async () => {
-                const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
-                await db.writeGeography(geography)
-                await db.writePolicy(COUNT_POLICY_JSON)
-                await db.publishPolicy(COUNT_POLICY_UUID)
-                done()
-              })
-          })
-      })
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          agency_request
+            .post('/vehicles')
+            .set('Authorization', ADMIN_AUTH)
+            .send(TEST_VEHICLE)
+            .expect(201)
+            .end(() => {
+              agency_request
+                .post(`/vehicles/${DEVICE_UUID}/event`)
+                .set('Authorization', ADMIN_AUTH)
+                .send({
+                  event_type: 'trip_start',
+                  trip_id: TRIP_UUID,
+                  telemetry: TEST_TELEMETRY,
+                  timestamp: testTimestamp++
+                })
+                .expect(201)
+                .end(async () => {
+                  const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
+                  await db.writeGeography(geography)
+                  await db.writePolicy(COUNT_POLICY_JSON)
+                  await db.publishPolicy(COUNT_POLICY_UUID)
+                  done()
+                })
+            })
+        })
     })
 
-    afterEach(async () => {
-      await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
+    afterEach(done => {
+      agency_request
+        .get('/test/shutdown')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(err => {
+          done(err)
+        })
     })
 
     it('Verifies initial policy hit OK', done => {
@@ -322,16 +348,25 @@ describe('Tests Compliance API:', () => {
       devices.forEach(device => {
         telemetry.push(makeTelemetryInArea(device, now(), CITY_OF_LA, 10))
       })
-      const seedData = { devices, events, telemetry }
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
-        Promise.all([db.seed(seedData), cache.seed(seedData)]).then(async () => {
-          const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
-          await db.writeGeography(geography)
-          await db.writePolicy(COUNT_POLICY_JSON)
-          await db.publishPolicy(COUNT_POLICY_UUID)
-          done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          provider_request
+            .post('/test/seed')
+            .set('Authorization', PROVIDER_AUTH)
+            .send({ devices, events, telemetry })
+            .expect(201)
+            .end(async (err, result) => {
+              test.value(result).hasHeader('content-type', APP_JSON)
+              const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
+              await db.writeGeography(geography)
+              await db.writePolicy(COUNT_POLICY_JSON)
+              await db.publishPolicy(COUNT_POLICY_UUID)
+              done(err)
+            })
         })
-      })
     })
 
     it('Verifies count in compliance', done => {
@@ -346,8 +381,14 @@ describe('Tests Compliance API:', () => {
         })
     })
 
-    afterEach(async () => {
-      await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
+    afterEach(done => {
+      agency_request
+        .get('/test/shutdown')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(err => {
+          done(err)
+        })
     })
   })
 
@@ -424,16 +465,25 @@ describe('Tests Compliance API:', () => {
       devices.forEach(device => {
         telemetry.push(makeTelemetryInArea(device, now(), CITY_OF_LA, 10))
       })
-      const seedData = { devices, events, telemetry }
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
-        Promise.all([db.seed(seedData), cache.seed(seedData)]).then(async () => {
-          const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
-          await db.writeGeography(geography)
-          await db.writePolicy(COUNT_POLICY_JSON)
-          await db.publishPolicy(COUNT_POLICY_UUID)
-          done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          provider_request
+            .post('/test/seed')
+            .set('Authorization', PROVIDER_AUTH)
+            .send({ devices, events, telemetry })
+            .expect(201)
+            .end(async (err, result) => {
+              test.value(result).hasHeader('content-type', APP_JSON)
+              const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
+              await db.writeGeography(geography)
+              await db.writePolicy(COUNT_POLICY_JSON)
+              await db.publishPolicy(COUNT_POLICY_UUID)
+              await done(err)
+            })
         })
-      })
     })
 
     it('Verifies violation of count compliance (over)', done => {
@@ -449,8 +499,14 @@ describe('Tests Compliance API:', () => {
         })
     })
 
-    afterEach(async () => {
-      await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
+    afterEach(done => {
+      agency_request
+        .get('/test/shutdown')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(err => {
+          done(err)
+        })
     })
   })
 
@@ -462,16 +518,25 @@ describe('Tests Compliance API:', () => {
       devices.forEach(device => {
         telemetry.push(makeTelemetryInArea(device, now(), CITY_OF_LA, 10))
       })
-      const seedData = { devices, events, telemetry }
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
-        Promise.all([db.seed(seedData), cache.seed(seedData)]).then(async () => {
-          const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
-          await db.writeGeography(geography)
-          await db.writePolicy(TIME_POLICY_JSON)
-          await db.publishPolicy(TIME_POLICY_UUID)
-          done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          provider_request
+            .post('/test/seed')
+            .set('Authorization', PROVIDER_AUTH)
+            .send({ devices, events, telemetry })
+            .expect(201)
+            .end(async (err, result) => {
+              test.value(result).hasHeader('content-type', APP_JSON)
+              const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
+              await db.writeGeography(geography)
+              await db.writePolicy(TIME_POLICY_JSON)
+              await db.publishPolicy(TIME_POLICY_UUID)
+              await done(err)
+            })
         })
-      })
     })
 
     it('Verifies OK time compliance', done => {
@@ -486,8 +551,14 @@ describe('Tests Compliance API:', () => {
         })
     })
 
-    afterEach(async () => {
-      await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
+    afterEach(done => {
+      agency_request
+        .get('/test/shutdown')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(err => {
+          done(err)
+        })
     })
   })
 
@@ -499,16 +570,25 @@ describe('Tests Compliance API:', () => {
       devices.forEach(device => {
         telemetry.push(makeTelemetryInArea(device, now(), CITY_OF_LA, 10))
       })
-      const seedData = { devices, events, telemetry }
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
-        Promise.all([db.seed(seedData), cache.seed(seedData)]).then(async () => {
-          const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
-          await db.writeGeography(geography)
-          await db.writePolicy(TIME_POLICY_JSON)
-          await db.publishPolicy(TIME_POLICY_UUID)
-          done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          provider_request
+            .post('/test/seed')
+            .set('Authorization', PROVIDER_AUTH)
+            .send({ devices, events, telemetry })
+            .expect(201)
+            .end(async (err, result) => {
+              test.value(result).hasHeader('content-type', APP_JSON)
+              const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
+              await db.writeGeography(geography)
+              await db.writePolicy(TIME_POLICY_JSON)
+              await db.publishPolicy(TIME_POLICY_UUID)
+              await done(err)
+            })
         })
-      })
     })
 
     it('Verifies violation of time compliance', done => {
@@ -523,22 +603,32 @@ describe('Tests Compliance API:', () => {
         })
     })
 
-    afterEach(async () => {
-      await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
+    afterEach(done => {
+      agency_request
+        .get('/test/shutdown')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(err => {
+          done(err)
+        })
     })
   })
 
   describe('Attempts to check compliance for non-existent policy', () => {
     it('Checks for a valid UUID, but not present in db', done => {
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(async () => {
-        request
-          .get(`/snapshot/${TIME_POLICY_UUID}`)
-          .set('Authorization', ADMIN_AUTH)
-          .expect(404)
-          .end(err => {
-            done(err)
-          })
-      })
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          request
+            .get(`/snapshot/${TIME_POLICY_UUID}`)
+            .set('Authorization', ADMIN_AUTH)
+            .expect(400)
+            .end(err => {
+              done(err)
+            })
+        })
     })
   })
 
@@ -550,16 +640,25 @@ describe('Tests Compliance API:', () => {
       devices.forEach(device => {
         telemetry.push(makeTelemetryInArea(device, now(), LA_BEACH, 10))
       })
-      const seedData = { devices, events, telemetry }
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
-        Promise.all([db.seed(seedData), cache.seed(seedData)]).then(async () => {
-          const geography = { geography_id: LA_BEACH, geography_json: restrictedAreas }
-          await db.writeGeography(geography)
-          await db.writePolicy(COUNT_POLICY_JSON_2)
-          await db.publishPolicy(COUNT_POLICY_UUID_2)
-          done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          provider_request
+            .post('/test/seed')
+            .set('Authorization', PROVIDER_AUTH)
+            .send({ devices, events, telemetry })
+            .expect(201)
+            .end(async (err, result) => {
+              test.value(result).hasHeader('content-type', APP_JSON)
+              const geography = { geography_id: LA_BEACH, geography_json: restrictedAreas }
+              await db.writeGeography(geography)
+              await db.writePolicy(COUNT_POLICY_JSON_2)
+              await db.publishPolicy(COUNT_POLICY_UUID_2)
+              done(err)
+            })
         })
-      })
     })
 
     it('Verifies on a tuesday that vehicles are allowed', done => {
@@ -602,16 +701,25 @@ describe('Tests Compliance API:', () => {
       devices.forEach(device => {
         telemetry.push(makeTelemetryInArea(device, now(), CITY_OF_LA, 10))
       })
-      const seedData = { devices, events, telemetry }
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
-        Promise.all([db.seed(seedData), cache.seed(seedData)]).then(async () => {
-          const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
-          await db.writeGeography(geography)
-          await db.writePolicy(COUNT_POLICY_JSON_3)
-          await db.publishPolicy(COUNT_POLICY_UUID_3)
-          done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          provider_request
+            .post('/test/seed')
+            .set('Authorization', PROVIDER_AUTH)
+            .send({ devices, events, telemetry })
+            .expect(201)
+            .end(async (err, result) => {
+              test.value(result).hasHeader('content-type', APP_JSON)
+              const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
+              await db.writeGeography(geography)
+              await db.writePolicy(COUNT_POLICY_JSON_3)
+              await db.publishPolicy(COUNT_POLICY_UUID_3)
+              done(err)
+            })
         })
-      })
     })
 
     it('Verifies violation for particular event', done => {
@@ -627,8 +735,14 @@ describe('Tests Compliance API:', () => {
         })
     })
 
-    afterEach(async () => {
-      await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
+    afterEach(done => {
+      agency_request
+        .get('/test/shutdown')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(err => {
+          done(err)
+        })
     })
   })
 
@@ -640,16 +754,25 @@ describe('Tests Compliance API:', () => {
       devices.forEach(device => {
         telemetry.push(makeTelemetryInArea(device, now(), CITY_OF_LA, 10))
       })
-      const seedData = { devices, events, telemetry }
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
-        Promise.all([db.seed(seedData), cache.seed(seedData)]).then(async () => {
-          const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
-          await db.writeGeography(geography)
-          await db.writePolicy(COUNT_POLICY_JSON_3)
-          await db.publishPolicy(COUNT_POLICY_UUID_3)
-          done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          provider_request
+            .post('/test/seed')
+            .set('Authorization', PROVIDER_AUTH)
+            .send({ devices, events, telemetry })
+            .expect(201)
+            .end(async (err, result) => {
+              test.value(result).hasHeader('content-type', APP_JSON)
+              const geography = { geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
+              await db.writeGeography(geography)
+              await db.writePolicy(COUNT_POLICY_JSON_3)
+              await db.publishPolicy(COUNT_POLICY_UUID_3)
+              done(err)
+            })
         })
-      })
     })
 
     it('Verifies compliance for particular event', done => {
@@ -664,8 +787,14 @@ describe('Tests Compliance API:', () => {
         })
     })
 
-    afterEach(async () => {
-      await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
+    afterEach(done => {
+      agency_request
+        .get('/test/shutdown')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(err => {
+          done(err)
+        })
     })
   })
 
@@ -745,19 +874,24 @@ describe('Tests Compliance API:', () => {
         TEST_ZONE_NO_VALID_DROP_OFF_POINTS,
         'provider_drop_off'
       )
-      Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(async () => {
-        const seedData: { devices: Device[]; events: VehicleEvent[]; telemetry: Telemetry[] } = {
-          devices: [...devices_a, ...devices_b],
-          events: [...events_a, ...events_b],
-          telemetry: []
-        }
-        await Promise.all([db.initialize(), cache.initialize()])
-        await Promise.all([cache.seed(seedData), db.seed(seedData)])
-        await Promise.all(geographies.map((geography: Geography) => db.writeGeography(geography)))
-        await db.writePolicy(VENICE_SPEC_OPS_POLICY)
-        await db.publishPolicy(VENICE_SPEC_OPS_POLICY.policy_id)
-        done()
-      })
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(async () => {
+          // Seed
+          const seedData: { devices: Device[]; events: VehicleEvent[]; telemetry: Telemetry[] } = {
+            devices: [...devices_a, ...devices_b],
+            events: [...events_a, ...events_b],
+            telemetry: []
+          }
+          await Promise.all([db.initialize(), cache.initialize()])
+          await Promise.all([cache.seed(seedData), db.seed(seedData)])
+          await Promise.all(geographies.map((geography: Geography) => db.writeGeography(geography)))
+          await db.writePolicy(VENICE_SPEC_OPS_POLICY)
+          await db.publishPolicy(VENICE_SPEC_OPS_POLICY.policy_id)
+          done()
+        })
     })
 
     it('Verify 22 vehicles are matched within the first rule (inside of allowed zones), and 10 in the second (because they have not been previously matched).', done => {
@@ -792,23 +926,29 @@ describe('Tests Compliance API:', () => {
         telemetry_a.push(makeTelemetryInArea(device, now(), CITY_OF_LA, 10))
       })
 
-      // Seed
-      const seedData = {
-        devices: [...devices],
-        events: [...events_a, ...events_b],
-        telemetry: [...telemetry_a, ...telemetry_b]
-      }
-      Promise.all([db.initialize(), cache.initialize()]).then(() => {
-        Promise.all([cache.seed(seedData), db.seed(seedData)]).then(() => {
-          db.writeGeography({ geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }).then(() => {
-            db.writePolicy(COUNT_POLICY_JSON_4).then(() => {
-              db.publishPolicy(COUNT_POLICY_JSON_4.policy_id).then(() => {
-                done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          // Seed
+          const seedData = {
+            devices: [...devices],
+            events: [...events_a, ...events_b],
+            telemetry: [...telemetry_a, ...telemetry_b]
+          }
+          Promise.all([db.initialize(), cache.initialize()]).then(() => {
+            Promise.all([cache.seed(seedData), db.seed(seedData)]).then(() => {
+              db.writeGeography({ geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }).then(() => {
+                db.writePolicy(COUNT_POLICY_JSON_4).then(() => {
+                  db.publishPolicy(COUNT_POLICY_JSON_4.policy_id).then(() => {
+                    done()
+                  })
+                })
               })
             })
           })
         })
-      })
     })
 
     it('Historical check reports 5 violations', done => {
@@ -850,21 +990,27 @@ describe('Tests Compliance API:', () => {
         return [...acc, makeTelemetryInArea(device, now(), CITY_OF_LA, 10)]
       }, [])
 
-      // Seed
-      const seedData = {
-        devices: [...devices_a, ...devices_b],
-        events: [...events_a, ...events_b],
-        telemetry: [...telemetry_a, ...telemetry_b]
-      }
-      Promise.all([db.initialize(), cache.initialize()]).then(() => {
-        Promise.all([cache.seed(seedData), db.seed(seedData)]).then(() => {
-          db.writePolicy(COUNT_POLICY_JSON).then(() => {
-            db.writeGeography({ geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }).then(() => {
-              done()
+      request
+        .get('/test/initialize')
+        .set('Authorization', ADMIN_AUTH)
+        .expect(200)
+        .end(() => {
+          // Seed
+          const seedData = {
+            devices: [...devices_a, ...devices_b],
+            events: [...events_a, ...events_b],
+            telemetry: [...telemetry_a, ...telemetry_b]
+          }
+          Promise.all([db.initialize(), cache.initialize()]).then(() => {
+            Promise.all([cache.seed(seedData), db.seed(seedData)]).then(() => {
+              db.writePolicy(COUNT_POLICY_JSON).then(() => {
+                db.writeGeography({ geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }).then(() => {
+                  done()
+                })
+              })
             })
           })
         })
-      })
     })
 
     it('Test count endpoint success', done => {
@@ -932,35 +1078,12 @@ describe('Tests Compliance API:', () => {
         })
     })
 
-    afterEach(async () => {
-      await Promise.all([db.shutdown(), cache.shutdown(), stream.shutdown()])
-    })
-  })
-
-  describe('Verifies max 0 count policy', () => {
-    before('Setup max 0 count policy', async () => {
-      const geography = { geography_id: 'c0591267-bb6a-4f28-a612-ff7f4a8f8b2a', geography_json: restrictedAreas }
-
-      const devices: Device[] = makeDevices(15, now())
-      const events = makeEventsWithTelemetry(devices, now() - 10, LA_BEACH, 'trip_start')
-
-      const seedData = { devices, events, telemetry: [] }
-
-      await Promise.all([db.initialize(), cache.initialize()])
-      await Promise.all([cache.seed(seedData), db.seed(seedData)])
-      await db.writeGeography(geography)
-      await db.writePolicy(COUNT_POLICY_JSON_5)
-      await db.publishPolicy(COUNT_POLICY_JSON_5.policy_id)
-    })
-
-    it('Verifies max 0 single rule policy operates as expected', done => {
-      request
-        .get(`/snapshot/${COUNT_POLICY_JSON_5.policy_id}`)
-        .set('Authorization', PROVIDER_AUTH_2)
+    afterEach(done => {
+      agency_request
+        .get('/test/shutdown')
+        .set('Authorization', ADMIN_AUTH)
         .expect(200)
-        .end((err, result) => {
-          test.assert(result.body.total_violations === 15)
-          test.value(result).hasHeader('content-type', APP_JSON)
+        .end(err => {
           done(err)
         })
     })

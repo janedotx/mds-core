@@ -1,19 +1,14 @@
 import bodyParser from 'body-parser'
 import express from 'express'
-import cors from 'cors'
 import { pathsFor, AuthorizationError } from '@mds-core/mds-utils'
 import { AuthorizationHeaderApiAuthorizer, ApiAuthorizer, ApiAuthorizerClaims } from '@mds-core/mds-api-authorizer'
-import { ScopeValidator, validateScopes, AccessTokenScope } from '@mds-core/mds-api-scopes'
 
 export type ApiRequest = express.Request
 
-export interface ApiResponseLocals {
-  claims: ApiAuthorizerClaims | null
-  scopes: AccessTokenScope[]
-}
-
 export interface ApiResponse<T = unknown> extends express.Response {
-  locals: ApiResponseLocals
+  locals: {
+    claims: ApiAuthorizerClaims | null
+  }
   status: (code: number) => ApiResponse<T | { error: Error }>
   send: (body: T) => ApiResponse<T | { error: Error }>
 }
@@ -39,52 +34,26 @@ const about = () => {
   }
 }
 
-interface ApiServerOptions {
-  authorizer: ApiAuthorizer
-  handleCors: boolean
-}
-
 export const ApiServer = (
   api: (server: express.Express) => express.Express,
-  options: Partial<ApiServerOptions> = {},
+  authorizer: ApiAuthorizer = AuthorizationHeaderApiAuthorizer,
   app: express.Express = express()
 ): express.Express => {
-  const { authorizer, handleCors } = {
-    authorizer: AuthorizationHeaderApiAuthorizer,
-    handleCors: false,
-    ...options
-  }
-
-  // Disable x-powered-by header
-  app.disable('x-powered-by')
-
-  // Parse JSON body
-  app.use(bodyParser.json({ limit: '5mb' }))
-
-  // Enable CORS
-  app.use(
-    handleCors
-      ? cors() // Server handles CORS
-      : (req: ApiRequest, res: ApiResponse, next: express.NextFunction) => {
-          // Gateway handles CORS pre-flight
-          if (req.method !== 'OPTIONS') {
-            res.header('Access-Control-Allow-Origin', '*')
-          }
-          next()
-        }
-  )
-
   // Authorizer
   app.use((req: ApiRequest, res: ApiResponse, next: express.NextFunction) => {
     const { MAINTENANCE: maintenance } = process.env
     if (maintenance) {
       return res.status(503).send(about())
     }
-    const claims = authorizer(req)
-    res.locals.claims = claims
-    res.locals.scopes = claims && claims.scope ? (claims.scope.split(' ') as AccessTokenScope[]) : []
+    res.locals.claims = authorizer(req)
     next()
   })
+
+  // Disable x-powered-by header
+  app.disable('x-powered-by')
+
+  // Parse JSON bodiy
+  app.use(bodyParser.json({ limit: '5mb' }))
 
   app.get(pathsFor('/'), async (req: ApiRequest, res: ApiResponse) => {
     // 200 OK
@@ -104,15 +73,30 @@ export const ApiServer = (
   return api(app)
 }
 
-/* istanbul ignore next */
-export const checkScope = (validator: ScopeValidator) => (
+// Canonical list of MDS scopes
+const MDS_ACCESS_SCOPES = ['admin:all', 'test:all'] as const
+type MDS_ACCESS_SCOPE = typeof MDS_ACCESS_SCOPES[number]
+
+export const hasAccessScope = (scopes: MDS_ACCESS_SCOPE[], claims: ApiAuthorizerClaims | null) => {
+  if (scopes.length > 0 && claims && claims.scope) {
+    const granted = claims.scope.split(' ')
+    return scopes.some(scope => granted.includes(scope))
+  }
+  return scopes.length === 0
+}
+
+// This will generete an Express middleware function to verify that the token claims
+// contain one or more of the specified scopes, for example:
+// verifyAccessScope('test:all', 'admin:all') allows access with either test:all OR admin:all
+// Express middleware can be chained to require more than one scope, for example:
+// verifyAccessScope('test:all'), verifyAccessScope('admin:all') requires both test:all AND admin:all
+export const verifyAccessScope = (...scopes: MDS_ACCESS_SCOPE[]) => (
   req: ApiRequest,
   res: ApiResponse,
   next: express.NextFunction
 ) => {
-  if (process.env.VERIFY_ACCESS_TOKEN_SCOPE === 'false' || validateScopes(validator, res.locals.scopes)) {
-    next()
-  } else {
-    res.status(403).send({ error: new AuthorizationError('no access without scope', { claims: res.locals.claims }) })
+  if (hasAccessScope(scopes, res.locals.claims)) {
+    return next()
   }
+  return res.status(403).send({ error: new AuthorizationError('no access without scope', { scopes }) })
 }
