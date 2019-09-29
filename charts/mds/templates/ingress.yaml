@@ -1,4 +1,5 @@
 {{- range $api := .Values.apis }}
+{{ if $api.pathPrefix}}
 apiVersion: networking.istio.io/v1alpha3
 kind: VirtualService
 metadata:
@@ -16,7 +17,7 @@ spec:
     route:
     - destination:
         port:
-          number: {{ $api.port }}
+          number: 80
         host: {{ $api.name }}.{{ $.Release.Namespace}}.svc.cluster.local
     corsPolicy:
       allowOrigin:
@@ -35,6 +36,7 @@ spec:
       - Authorization
       maxAge: "10m"
 ---
+{{- end }}
 {{- end }}
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
