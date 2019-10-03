@@ -4,6 +4,7 @@ import cors from 'cors'
 import { pathsFor, AuthorizationError } from '@mds-core/mds-utils'
 import { AuthorizationHeaderApiAuthorizer, ApiAuthorizer, ApiAuthorizerClaims } from '@mds-core/mds-api-authorizer'
 import { AccessTokenScope } from '@mds-core/mds-types'
+import { getExpressFixtures } from './test-utils'
 
 export type ApiRequest = express.Request
 

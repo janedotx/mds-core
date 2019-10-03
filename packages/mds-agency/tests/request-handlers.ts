@@ -17,6 +17,7 @@ import {
   updateVehicle
 } from '../request-handlers'
 import * as utils from '../utils'
+import { getExpressFixtures } from './test-utils'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -39,15 +40,10 @@ describe('Agency API request handlers', () => {
         }
       ]
       Sinon.replace(areas, 'readServiceAreas', Sinon.fake.resolves(serviceAreas))
-      const res: AgencyApiResponse = {} as AgencyApiResponse
-      const sendHandler = Sinon.fake.returns('asdf')
-      const statusHandler = Sinon.fake.returns({
-        send: sendHandler
-      } as any)
-      res.status = statusHandler
-      await getAllServiceAreas({} as AgencyApiRequest, res)
-      assert.equal(statusHandler.calledWith(200), true)
-      assert.equal(sendHandler.calledWith({ service_areas: serviceAreas }), true)
+      const { req, res } = getExpressFixtures((foo) => foo, (foo) => foo)
+      await getAllServiceAreas(req, res)
+      assert.equal(res.status.calledWith(200), true)
+      assert.equal(res.status().send.calledWith({ service_areas: serviceAreas }), true)
       Sinon.restore()
     })
 
