@@ -71,6 +71,14 @@ apis:
     useEvents: true
     triggeredBy:
       cron: "0 * * * *"
+  - name: provider-processor
+    port: 4009
+    version: latest
+    useDB: true
+    useCache: true
+    useEvents: true
+    triggeredBy:
+      cron: "0 * * * *"
 registry: evanxadkins
 useLatestImage: true
 tls:
