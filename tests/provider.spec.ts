@@ -6,7 +6,7 @@ import { gitHash, gitBranch, nodeVersion, packageVersion, isIsoDate } from './en
 describe('Provider', function() {
   it('successfully initializes', async function() {
     const res = await requestPromise({
-      url: 'http://localhost/provider',
+      url: 'http://localhost/provider/trips',
       auth: {
         bearer: getAuthToken('', {
           scope: "admin:all test:all"
