@@ -10,7 +10,7 @@ describe('Agency', function() {
   it('successfully initializes', async function() {
     console.log('fire dis off')
     const res = await requestPromise({
-      url: 'http://localhost/agency',
+      url: 'http://localhost:4001',
       auth: {
         bearer: getAuthToken(
           '',
@@ -27,7 +27,7 @@ describe('Agency', function() {
     console.log({ res })
     assert.strictEqual(res.statusCode, 200)
     assert.strictEqual(res.headers['content-type'], 'application/json; charset=utf-8')
-    assert.strictEqual(res.headers.server, 'istio-envoy')
+    // assert.strictEqual(res.headers.server, 'istio-envoy')
     assert.strictEqual(res.body.name, '@container-images/mds-agency')
     // fixme: get package version from env
     // assert.strictEqual(res.body.version, packageVersion())
@@ -40,7 +40,7 @@ describe('Agency', function() {
 
   it('Inits a vehicle', async function() {
     const res = await requestPromise({
-      url: 'http://localhost/agency/vehicles',
+      url: 'http://localhost:4001/vehicles',
       auth: {
         bearer: getAuthToken(
           '',
