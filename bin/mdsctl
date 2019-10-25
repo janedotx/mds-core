@@ -901,7 +901,7 @@ preset() {
         is+="${is:+,}sets-mds+=redis.slave.persistence.enabled=false";;
       minimal)
         preset $(normalize "disable,no-events,local,no-persistence")
-        is+="${is:+,}sets-mds+=apis.mds-agency.enabled=true";;
+        is+="${is:+,}sets-mds+=apis.mds-agency.enabled=true,sets-mds+=apis.mds-provider.enabled=true,sets-mds+=apis.mds-provider.version=0.1.17-unstable";;
     esac
   done; unset p
 
