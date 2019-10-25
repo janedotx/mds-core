@@ -1,46 +1,52 @@
+import requestPromise from 'request-promise'
+import assert from 'assert'
+import { getAuthToken } from '../get-auth-token'
+
 // MDS Provider API Tests
 
 describe('MDS Provider API Tests', () => {
 
   // API call test: GET /trips
   describe('GET /trips', () => {
-    it('Makes a GET call to /trips', function() {
+    it('Makes a GET call to /trips', async () => {
       const urlParams = {}
       const {} = urlParams
-      cy.request({
+      const res = await requestPromise({
         url: `http://localhost/agency/trips/`,
         auth: {
-          bearer: "." + Base64.encode("{\"scope\": \"admin:all test:all\"}") + ".",
+          bearer: getAuthToken('', {
+            scope: "admin:all test:all"
+          }, '')
         },
-        method: 'GET'
+        method: 'GET',
+        json: true,
+        resolveWithFullResponse: true
       })
-      .then((resp) => {
-        expect(resp.status).to.eq(200)
-        expect(resp.headers['content-type']).to.eq('application/json; charset=utf-8');
-        expect(resp.headers['server']).to.eq('istio-envoy');
-        expect(resp.body).to.deep.eq({ normal: 'payload' });
-      })
+
+      // TODO assertions here
+      assert.strictEqual(res.statusCode, 200)
     })
   })
 
   // API call test: GET /status_changes
   describe('GET /status_changes', () => {
-    it('Makes a GET call to /status_changes', function() {
+    it('Makes a GET call to /status_changes', async () => {
       const urlParams = {}
       const {} = urlParams
-      cy.request({
+      const res = await requestPromise({
         url: `http://localhost/agency/status_changes/`,
         auth: {
-          bearer: "." + Base64.encode("{\"scope\": \"admin:all test:all\"}") + ".",
+          bearer: getAuthToken('', {
+            scope: "admin:all test:all"
+          }, '')
         },
-        method: 'GET'
+        method: 'GET',
+        json: true,
+        resolveWithFullResponse: true
       })
-      .then((resp) => {
-        expect(resp.status).to.eq(200)
-        expect(resp.headers['content-type']).to.eq('application/json; charset=utf-8');
-        expect(resp.headers['server']).to.eq('istio-envoy');
-        expect(resp.body).to.deep.eq({ normal: 'payload' });
-      })
+
+      // TODO assertions here
+      assert.strictEqual(res.statusCode, 200)
     })
   })
 

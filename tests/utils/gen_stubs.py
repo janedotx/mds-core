@@ -2,27 +2,32 @@ import os
 
 template_test = """  // API call test: {method} {path}
   describe('{method} {path}', () => {{
-    it('Makes a {method} call to {path}', function() {{
+    it('Makes a {method} call to {path}', async () => {{
       const urlParams = {url_params_dict}
       const {{{url_params_keys}}} = urlParams
-      cy.request({{
+      const res = await requestPromise({{
         url: `http://localhost/agency{augmented_path}`,
         auth: {{
-          bearer: "." + Base64.encode("{{\\"scope\\": \\"admin:all test:all\\"}}") + ".",
+          bearer: getAuthToken('', {{
+            scope: "admin:all test:all"
+          }}, '')
         }},
-        method: '{method}'
+        method: 'GET',
+        json: true,
+        resolveWithFullResponse: true
       }})
-      .then((resp) => {{
-        expect(resp.status).to.eq(200)
-        expect(resp.headers['content-type']).to.eq('application/json; charset=utf-8');
-        expect(resp.headers['server']).to.eq('istio-envoy');
-        expect(resp.body).to.deep.eq({{ normal: 'payload' }});
-      }})
+
+      // TODO assertions here
+      assert.strictEqual(res.statusCode, 200)
     }})
   }})
 """
 
-template_test_file = """// {package} API Tests
+template_test_file = """import requestPromise from 'request-promise'
+import assert from 'assert'
+import {{ getAuthToken }} from '../get-auth-token'
+
+// {package} API Tests
 
 describe('{package} API Tests', () => {{
 
