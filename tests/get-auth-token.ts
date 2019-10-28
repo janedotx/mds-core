@@ -8,3 +8,7 @@ interface Payload {
 export const getAuthToken = (header : string, payload : Payload, signature : string) => {
   return `.${Base64.encode(JSON.stringify(payload))}.`
 }
+
+export const getBasic = () => {
+  return Base64.encode(`uuid|scope1 scope2`)
+}
