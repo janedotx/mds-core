@@ -4,9 +4,9 @@ import { Buffer } from 'buffer'
 import { MOCHA_PROVIDER_ID } from '@mds-core/mds-providers'
 import uuid from 'uuid'
 import { PROPULSION_TYPES, VEHICLE_TYPES } from '@mds-core/mds-types'
-import { getAuthToken } from './get-auth-token'
-import { gitHash, gitBranch, nodeVersion, packageVersion, isIsoDate, seedDb, resetDb, closeDb } from './environment'
-import { dockerComposeConfig, kubernetesConfig } from './agency.env'
+import { getAuthToken } from '../../../tests/get-auth-token'
+import { gitBranch, nodeVersion, isIsoDate, resetDb, closeDb } from '../../../tests/environment'
+import { dockerComposeConfig, kubernetesConfig } from '../../../tests/agency.env'
 
 const config = process.env.TEST_ENV === 'docker-compose' ? dockerComposeConfig : kubernetesConfig
 
@@ -75,6 +75,7 @@ describe('Agency', async () => {
       const res = await requestPromise({
         url: 'http://localhost:4001/vehicles',
         headers: {
+          // FIXME: consolidate this vs. bearer token
           Authorization: `Basic ${Buffer.from(`${MOCHA_PROVIDER_ID}|admin:all test:all`).toString('base64')}`
         },
         method: 'GET',
