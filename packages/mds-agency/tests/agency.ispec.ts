@@ -6,14 +6,39 @@ import uuid from 'uuid'
 import { PROPULSION_TYPES, VEHICLE_TYPES } from '@mds-core/mds-types'
 import { getAuthToken } from '../../../tests/get-auth-token'
 import { gitBranch, nodeVersion, isIsoDate, resetDb, closeDb } from '../../../tests/environment'
-import { dockerComposeConfig, kubernetesConfig } from '../../../tests/agency.env'
+import { dockerComposeConfig, kubernetesConfig } from './agency.env'
 
-const config = process.env.TEST_ENV === 'docker-compose' ? dockerComposeConfig : kubernetesConfig
+const baseConfig = process.env.TEST_ENV === 'docker-compose' ? dockerComposeConfig : kubernetesConfig
 
+interface EnvOverrides {
+  // host_url?: string
+  [key: string]: string | undefined
+}
+const envOverrides : EnvOverrides = {
+  'host_url': process.env.HOST_URL
+}
+
+// https://stackoverflow.com/a/39977485
+function filterObject(obj : EnvOverrides) {
+  const ret : EnvOverrides = {}
+  Object.keys(obj)
+      .filter((key) => obj[key] !== undefined)
+      .forEach((key) => ret[key] = obj[key])
+  return ret
+}
+
+const config = {
+  ...baseConfig,
+  ...filterObject(envOverrides)
+}
+
+// Specify HOST_URL env var
+// Ex.
+// HOST_URL="http://foo.bar" yarn test:integration
 describe('Agency', async () => {
   it('successfully initializes', async () => {
     const res = await requestPromise({
-      url: 'http://localhost:4001',
+      url: `${config.host_url}/agency`,
       auth: {
         bearer: getAuthToken(
           '',
@@ -51,7 +76,7 @@ describe('Agency', async () => {
 
     it('Inits a vehicle', async () => {
       const res = await requestPromise({
-        url: 'http://localhost:4001/vehicles',
+        url: `${config.host_url}/agency/vehicles`,
         headers: {
           Authorization: `Basic ${Buffer.from(`${MOCHA_PROVIDER_ID}|admin:all test:all`).toString('base64')}`
         },
@@ -73,7 +98,7 @@ describe('Agency', async () => {
 
     it('Gets some vehicles', async () => {
       const res = await requestPromise({
-        url: 'http://localhost:4001/vehicles',
+        url: `${config.host_url}/agency/vehicles`,
         headers: {
           // FIXME: consolidate this vs. bearer token
           Authorization: `Basic ${Buffer.from(`${MOCHA_PROVIDER_ID}|admin:all test:all`).toString('base64')}`
