@@ -2,34 +2,38 @@ import { execSync } from 'child_process'
 import db from '../packages/mds-db'
 import cache from '../packages/mds-cache'
 import stream from '../packages/mds-stream'
-import { Device, VEHICLE_TYPES } from '../packages/mds-types'
-import { makeDevices, makeTelemetryInArea } from '../packages/mds-test-data'
-import { makeEventsWithTelemetry } from '../packages/mds-test-data'
+import { Device, VEHICLE_TYPES, Telemetry, Policy, RULE_TYPES } from '../packages/mds-types'
+import { makeDevices, makeTelemetryInArea, makeEventsWithTelemetry } from '../packages/mds-test-data'
+
 import { now } from '../packages/mds-utils'
-import { Telemetry } from '../packages/mds-types'
-import { Policy } from '../packages/mds-types'
-import { RULE_TYPES } from '../packages/mds-types'
+
 import { la_city_boundary } from '../packages/mds-policy/tests/la-city-boundary'
 
 export const gitHash = () => {
-  return execSync('git rev-parse --short HEAD').toString().trim()
+  return execSync('git rev-parse --short HEAD')
+    .toString()
+    .trim()
 }
 
 export const gitBranch = () => {
-  return execSync('git rev-parse --abbrev-ref HEAD').toString().trim()
+  return execSync('git rev-parse --abbrev-ref HEAD')
+    .toString()
+    .trim()
 }
 
 export const nodeVersion = () => {
-  return execSync('node --version').toString().trim()
+  return execSync('node --version')
+    .toString()
+    .trim()
 }
 
 export const packageVersion = () => {
   // fixme: get package-version from env
-  return "0.1.14";
+  return '0.1.14'
 }
 
-export const isIsoDate = (s : string) => {
-  return (!/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z/.test(s)) ? false : new Date(s).toISOString() == s;
+export const isIsoDate = (s: string) => {
+  return !/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z/.test(s) ? false : new Date(s).toISOString() === s
 }
 
 export const seedDb = async () => {
@@ -67,15 +71,21 @@ export const seedDb = async () => {
   })
   const seedData = { devices, events, telemetry }
   await Promise.all([db.initialize(), cache.initialize(), stream.initialize()]).then(() => {
+    return true
   })
   await Promise.all([db.seed(seedData), cache.seed(seedData)]).then(async () => {
     const geography = { name: 'la', geography_id: GEOGRAPHY_UUID, geography_json: la_city_boundary }
     await db.writeGeography(geography)
     await db.writePolicy(COUNT_POLICY_JSON)
     await db.publishPolicy(COUNT_POLICY_UUID)
+    return true
   })
 }
 
 export const resetDb = async () => {
   await db.initialize()
+}
+
+export const closeDb = async () => {
+  await db.shutdown()
 }
