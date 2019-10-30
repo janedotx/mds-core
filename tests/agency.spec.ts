@@ -6,10 +6,12 @@ import uuid from 'uuid'
 import { PROPULSION_TYPES, VEHICLE_TYPES } from '@mds-core/mds-types'
 import { getAuthToken } from './get-auth-token'
 import { gitHash, gitBranch, nodeVersion, packageVersion, isIsoDate, seedDb, resetDb, closeDb } from './environment'
+import { dockerComposeConfig, kubernetesConfig } from './agency.env'
 
-describe('Agency', function() {
-  it('successfully initializes', async function() {
-    console.log('fire dis off')
+const config = process.env.TEST_ENV === 'docker-compose' ? dockerComposeConfig : kubernetesConfig
+
+describe('Agency', async () => {
+  it('successfully initializes', async () => {
     const res = await requestPromise({
       url: 'http://localhost:4001',
       auth: {
@@ -27,13 +29,13 @@ describe('Agency', function() {
     })
     assert.strictEqual(res.statusCode, 200)
     assert.strictEqual(res.headers['content-type'], 'application/json; charset=utf-8')
-    // assert.strictEqual(res.headers.server, 'istio-envoy')
+    assert.strictEqual(res.headers.server, config.serverHeader)
     assert.strictEqual(res.body.name, '@container-images/mds-agency')
     // fixme: get package version from env
     // assert.strictEqual(res.body.version, packageVersion())
     assert.strictEqual(isIsoDate(res.body.build.date), true)
     assert.strictEqual(res.body.build.branch, gitBranch())
-    assert.strictEqual(res.body.build.commit, gitHash())
+    assert.strictEqual(res.body.build.commit, config.commit)
     assert.strictEqual(`v${res.body.node}`, nodeVersion())
     assert.strictEqual(res.body.status, 'Running')
   })
