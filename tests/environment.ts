@@ -27,9 +27,10 @@ export const nodeVersion = () => {
     .trim()
 }
 
-export const packageVersion = () => {
-  // fixme: get package-version from env
-  return '0.1.14'
+export const packageVersion = (pkg: string) => {
+  return execSync('node -p "require(\'' + __dirname + '/../container-images/' + pkg + '/package.json' + '\').version"')
+    .toString()
+    .trim()
 }
 
 export const isIsoDate = (s: string) => {
