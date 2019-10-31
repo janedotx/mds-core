@@ -571,10 +571,7 @@ testUnit() {
 testIntegration() {
   check ${FUNCNAME[0]}
 
-  # todo: provide [ ui | cli ] option
-  # yarn cypress open
-  # fixme: run suites
-  yarn run ts-mocha ./tests/agency.spec.ts
+  TEST_ENV="kubernetes" yarn test:integration
 }
 
 get() {
