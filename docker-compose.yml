@@ -3,7 +3,7 @@ services:
   agency:
     image: mds-agency:0.1.17-unstable
     ports:
-      - '4001:4001'
+      - '4001'
     environment:
       PATH_PREFIX: /agency
       PG_HOST: postgres
