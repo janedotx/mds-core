@@ -16,8 +16,8 @@ const wss = new WebSocket.Server({ server })
 setWsHeartbeat(
   wss,
   (ws, data) => {
-    if (data === '{"kind":"ping"}') {
-      ws.send('{"kind":"pong"}')
+    if (data === 'PING') {
+      ws.send('PONG')
     }
   },
   10000
