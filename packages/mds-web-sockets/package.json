@@ -15,7 +15,8 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@mds-core/mds-logger": "0.1.23",
-    "@mds-core/mds-types": "0.1.22"
+    "@mds-core/mds-types": "0.1.22",
+    "ws-heartbeat": "1.1.0"
   },
   "scripts": {
     "build": "tsc --build tsconfig.build.json",

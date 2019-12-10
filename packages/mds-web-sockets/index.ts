@@ -1,4 +1,5 @@
 import log from '@mds-core/mds-logger'
+import { setWsHeartbeat } from 'ws-heartbeat/server'
 import WebSocket from 'ws'
 import { Telemetry, VehicleEvent } from '@mds-core/mds-types'
 import { ApiServer } from '@mds-core/mds-api-server'
@@ -11,6 +12,16 @@ const {
 const server = ApiServer(app => app).listen(PORT, () => log.info(`${npm_package_name} running on port ${PORT}`))
 
 const wss = new WebSocket.Server({ server })
+
+setWsHeartbeat(
+  wss,
+  (ws, data) => {
+    if (data === '{"kind":"ping"}') {
+      ws.send('{"kind":"pong"}')
+    }
+  },
+  10000
+)
 
 const clients = new Clients()
 
@@ -50,7 +61,13 @@ wss.on('connection', (ws: WebSocket) => {
     if (header === 'SUB') {
       return clients.saveClient(args, ws)
     }
-    return ws.send('Invalid request!')
+
+    if (ws.readyState === 1) {
+      return ws.send('Invalid request!')
+    } else {
+      // FIXME: Remove client from subscription lists
+      return ws.close()
+    }
   })
 })
 

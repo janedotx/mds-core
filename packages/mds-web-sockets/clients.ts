@@ -1,6 +1,5 @@
 import WebSocket from 'ws'
 import {BearerApiAuthorizer} from '@mds-core/mds-api-authorizer'
-import { string } from '@hapi/joi'
 
 export class Clients {
   authenticatedClients: WebSocket[]
