@@ -17,6 +17,7 @@ import {
   updateVehicle
 } from '../request-handlers'
 import * as utils from '../utils'
+import { mockRes, mockReq } from 'sinon-express-mock'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -26,6 +27,10 @@ function getLocals(provider_id: string) {
 
 describe('Agency API request handlers', () => {
   describe('Get all service areas', () => {
+    afterEach(() => {
+      Sinon.restore()
+    })
+
     it('Gets all service areas', async () => {
       const serviceAreas: ServiceArea[] = [
         {
@@ -39,34 +44,28 @@ describe('Agency API request handlers', () => {
         }
       ]
       Sinon.replace(areas, 'readServiceAreas', Sinon.fake.resolves(serviceAreas))
-      const res: AgencyApiResponse = {} as AgencyApiResponse
-      const sendHandler = Sinon.fake.returns('asdf')
-      const statusHandler = Sinon.fake.returns({
-        send: sendHandler
-      } as any)
-      res.status = statusHandler
-      await getAllServiceAreas({} as AgencyApiRequest, res)
-      assert.equal(statusHandler.calledWith(200), true)
-      assert.equal(sendHandler.calledWith({ service_areas: serviceAreas }), true)
-      Sinon.restore()
+      const res = mockRes()
+      const req = mockReq()
+      await getAllServiceAreas(req, res)
+      Sinon.assert.calledWith(res.status.firstCall, 200)
+      Sinon.assert.calledWith(res.send.firstCall, { service_areas: serviceAreas })
     })
 
     it('Handles a service area read exception', async () => {
       Sinon.replace(areas, 'readServiceAreas', Sinon.fake.rejects('fake-rejects'))
-      const res: AgencyApiResponse = {} as AgencyApiResponse
-      const sendHandler = Sinon.fake.returns('asdf')
-      const statusHandler = Sinon.fake.returns({
-        send: sendHandler
-      } as any)
-      res.status = statusHandler
-      await getAllServiceAreas({} as AgencyApiRequest, res)
-      assert.equal(statusHandler.calledWith(404), true)
-      assert.equal(sendHandler.calledWith({ result: 'not found' }), true)
-      Sinon.restore()
+      const res = mockRes()
+      const req = mockReq()
+      await getAllServiceAreas(req, res)
+      Sinon.assert.calledWith(res.status.firstCall, 404)
+      Sinon.assert.calledWith(res.send.firstCall, { result: 'not found' })
     })
   })
 
   describe('Get service area by id', () => {
+    afterEach(() => {
+      Sinon.restore()
+    })
+
     it('Gets service area by id', async () => {
       const serviceAreas: ServiceArea[] = [
         {
@@ -81,16 +80,11 @@ describe('Agency API request handlers', () => {
       ]
       Sinon.replace(areas, 'readServiceAreas', Sinon.fake.resolves(serviceAreas))
       const service_area_id = uuid()
-      const res: AgencyApiResponse = {} as AgencyApiResponse
-      const sendHandler = Sinon.fake.returns('asdf')
-      const statusHandler = Sinon.fake.returns({
-        send: sendHandler
-      } as any)
-      res.status = statusHandler
-      await getServiceAreaById({ params: { service_area_id } } as AgencyApiRequest<{ service_area_id: string }>, res)
-      assert.equal(statusHandler.calledWith(200), true)
-      assert.equal(sendHandler.calledWith({ service_areas: serviceAreas }), true)
-      Sinon.restore()
+      const res = mockRes()
+      const req = mockReq({ params: { service_area_id } } )
+      await getServiceAreaById(req, res)
+      Sinon.assert.calledWith(res.status.firstCall, 200)
+      Sinon.assert.calledWith(res.send.firstCall, { service_areas: serviceAreas })
     })
 
     it('Handles a service area read exception', async () => {
