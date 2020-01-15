@@ -2,72 +2,74 @@ apis:
   mds-provider:
     enabled: true
     pathPrefix: /provider
-    port: 4000
     version: ${PROVIDER_VERSION}
-    useDB: true
     migration: false
-    useCache: true
-    useEvents: false
   mds-agency:
     enabled: true
     pathPrefix: /agency
-    port: 4001
     version: ${AGENCY_VERSION}
-    useDB: true
     migration: false
-    useCache: true
-    useEvents: false
   mds-audit:
     enabled: true
     pathPrefix: /audit
-    port: 4002
     version: ${AUDIT_VERSION}
-    useDB: true
     migration: false
-    useCache: true
-    useEvents: false
   mds-policy:
     enabled: true
     pathPrefix: /policy
-    port: 4003
     version: ${POLICY_VERSION}
-    useDB: true
     migration: false
-    useCache: true
-    useEvents: false
   mds-compliance:
     enabled: true
     pathPrefix: /compliance
-    port: 4004
     version: ${COMPLIANCE_VERSION}
-    useDB: true
     migration: false
-    useCache: true
-    useEvents: false
   mds-daily:
     enabled: true
     pathPrefix: /daily
-    port: 4005
     version: ${DAILY_VERSION}
-    useDB: true
     migration: false
-    useCache: true
-    useEvents: false
+  mds-metrics:
+    enabled: true
+    pathPrefix: /metrics
+    version: ${METRICS_VERSION}
+    migration: false
   mds-native:
     enabled: true
     pathPrefix: /native
-    port: 4006
     version: ${NATIVE_VERSION}
-    useDB: true
     migration: false
-    useCache: true
-    useEvents: false
   mds-policy-author:
     enabled: true
     pathPrefix: /policy-author
-    port: 4007
     version: ${POLICY_AUTHOR_VERSION}
-    useDB: true
     migration: false
-    useCache: true
-    useEvents: false
+  mds-config:
+    enabled: true
+    pathPrefix: /config
+    version: ${CONFIG_VERSION}
+    migration: false
+  mds-web-sockets:
+    enabled: true
+    pathPrefix: /web-sockets
+    version: ${WEB_SOCKETS_VERSION}
+    migration: false
+processors:
+  mds-event-processor:
+    enabled: true
+    version: ${EVENT_PROCESSOR_VERSION}
+    migration: false
+    triggeredBy:
+      trigger: [event, telemetry]
+  mds-trip-processor:
+    enabled: true
+    version: ${TRIP_PROCESSOR_VERSION}
+    migration: false
+    triggeredBy:
+      cron: '0 * * * *'
+  mds-provider-processor:
+    enabled: true
+    version: ${PROVIDER_PROCESSOR_VERSION}
+    migration: false
+    triggeredBy:
+      cron: '0 * * * *'

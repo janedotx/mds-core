@@ -17,28 +17,48 @@
 import log from '@mds-core/mds-logger'
 
 import flatten from 'flat'
-import { capitalizeFirst, nullKeys, stripNulls, now, isInsideBoundingBox, routeDistance } from '@mds-core/mds-utils'
+import { NotFoundError, nullKeys, stripNulls, now, isInsideBoundingBox, routeDistance } from '@mds-core/mds-utils'
 import {
   UUID,
   Timestamp,
   Device,
   VehicleEvent,
+  TripsEvents,
+  TripsTelemetry,
   Telemetry,
+  StateEntry,
   BoundingBox,
   EVENT_STATUS_MAP,
-  VEHICLE_STATUSES
+  VEHICLE_STATUSES,
+  VEHICLE_TYPE
 } from '@mds-core/mds-types'
 import redis from 'redis'
 import bluebird from 'bluebird'
 
-import { parseTelemetry, parseEvent, parseDevice, parseCachedItem } from './unflatteners'
+import {
+  parseDeviceState,
+  parseAllDeviceStates,
+  parseTripsEvents,
+  parseTripsTelemetry,
+  parseAllTripsEvents,
+  parseTelemetry,
+  parseEvent,
+  parseDevice,
+  parseCachedItem
+} from './unflatteners'
 import {
   CacheReadDeviceResult,
   CachedItem,
+  CachedHashItem,
   StringifiedCacheReadDeviceResult,
   StringifiedEventWithTelemetry,
   StringifiedTelemetry,
-  StringifiedEvent
+  StringifiedEvent,
+  StringifiedStateEntry,
+  StringifiedAllDeviceStates,
+  StringifiedTripsEvents,
+  StringifiedTripsTelemetry,
+  StringifiedAllTripsEvents
 } from './types'
 
 const { env } = process
@@ -52,6 +72,8 @@ declare module 'redis' {
     flushdbAsync: () => Promise<'OK'>
     hdelAsync: (...args: (string | number)[]) => Promise<number>
     hgetallAsync: (arg1: string) => Promise<{ [key: string]: string }>
+    hgetAsync: (key: string, field: string) => Promise<string>
+    hsetAsync: (key: string, field: string, value: string) => Promise<number>
     hmsetAsync: (...args: unknown[]) => Promise<'OK'>
     infoAsync: () => Promise<string>
     keysAsync: (arg1: string) => Promise<string[]>
@@ -59,11 +81,20 @@ declare module 'redis' {
     zrangebyscoreAsync: (key: string, min: number | string, max: number | string) => Promise<string[]>
     georadiusAsync: (key: string, longitude: number, latitude: number, radius: number, unit: string) => Promise<UUID[]>
   }
+  interface Multi {
+    hgetallAsync: (arg1: string) => Promise<{ [key: string]: string }>
+  }
 }
 
 bluebird.promisifyAll(redis.RedisClient.prototype)
+bluebird.promisifyAll(redis.Multi.prototype)
 
 let cachedClient: redis.RedisClient | null
+
+// optionally prefix a 'tenantId' key given the redis is a shared service across deployments
+function decorateKey(key: string): string {
+  return env.TENANT_ID ? `${env.TENANT_ID}:$key` : key
+}
 
 async function getClient() {
   if (!cachedClient) {
@@ -105,34 +136,98 @@ async function info() {
   return data
 }
 
+async function hget(key: string, field: UUID): Promise<CachedItem | CachedHashItem | null> {
+  const flat = await (await getClient()).hgetAsync(decorateKey(key), field)
+  if (flat) {
+    return unflatten(flat)
+  }
+  return null
+}
+
+async function hgetall(key: string): Promise<CachedItem | CachedHashItem | null> {
+  const flat = await (await getClient()).hgetallAsync(decorateKey(key))
+  if (flat) {
+    return unflatten(flat)
+  }
+  return null
+}
+
+async function getVehicleType(keyID: UUID): Promise<VEHICLE_TYPE> {
+  // TODO: Fix type entry into cache so we don't need to do this unkown conversion
+  return ((await getClient()).hgetAsync(decorateKey(`device:${keyID}:device`), 'type') as unknown) as VEHICLE_TYPE
+}
+
+async function readDeviceState(field: UUID): Promise<StateEntry | null> {
+  const deviceState = await hget('device:state', field)
+  return deviceState ? parseDeviceState(deviceState as StringifiedStateEntry) : null
+}
+
+// TODO: Increase performance with provider pattern based fetch
+async function readAllDeviceStates(): Promise<{ [vehicle_id: string]: StateEntry } | null> {
+  const allDeviceStates = await hgetall('device:state')
+  return allDeviceStates ? parseAllDeviceStates(allDeviceStates as StringifiedAllDeviceStates) : null
+}
+
+async function writeDeviceState(field: UUID, data: StateEntry) {
+  return (await getClient()).hsetAsync(decorateKey('device:state'), field, JSON.stringify(data))
+}
+
+async function readTripsEvents(field: UUID): Promise<TripsEvents | null> {
+  const tripsEvents = await hget(decorateKey('trips:events'), field)
+  return tripsEvents ? parseTripsEvents(tripsEvents as StringifiedTripsEvents) : null
+}
+
+async function readAllTripsEvents(): Promise<{ [vehicle_id: string]: TripsEvents } | null> {
+  const allTripsEvents = await hgetall('trips:events')
+  return allTripsEvents ? parseAllTripsEvents(allTripsEvents as StringifiedAllTripsEvents) : null
+}
+
+async function writeTripsEvents(field: UUID, data: TripsEvents) {
+  return (await getClient()).hsetAsync(decorateKey('trips:events'), field, JSON.stringify(data))
+}
+
+async function deleteTripsEvents(field: UUID) {
+  return (await getClient()).hdelAsync(decorateKey('trips:events'), field)
+}
+
+async function readTripsTelemetry(field: UUID): Promise<TripsTelemetry | null> {
+  const tripsTelemetry = await hget(decorateKey('trips:telemetry'), field)
+  return tripsTelemetry ? parseTripsTelemetry(tripsTelemetry as StringifiedTripsTelemetry) : null
+}
+
+async function writeTripsTelemetry(field: UUID, data: TripsTelemetry) {
+  return (await getClient()).hsetAsync(decorateKey('trips:telemetry'), field, JSON.stringify(data))
+}
+
 // update the ordered list of (device_id, timestamp) tuples
 // so that we can trivially get a list of "updated since ___" device_ids
 async function updateVehicleList(device_id: UUID, timestamp?: Timestamp) {
   const when = timestamp || now()
   // log.info('redis zadd', device_id, when)
-  return (await getClient()).zaddAsync('device-ids', when, device_id)
+  return (await getClient()).zaddAsync(decorateKey('device-ids'), when, device_id)
 }
 async function hread(suffix: string, device_id: UUID): Promise<CachedItem> {
   if (!device_id) {
     throw new Error(`hread: tried to read ${suffix} for device_id ${device_id}`)
   }
-  const key = `device:${device_id}:${suffix}`
+  const key = decorateKey(`device:${device_id}:${suffix}`)
   const flat = await (await getClient()).hgetallAsync(key)
   if (flat) {
     return unflatten({ ...flat, device_id })
   }
-  throw new Error(`${suffix} for ${device_id} not found`)
+  throw new NotFoundError(`${suffix} for ${device_id} not found`)
 }
 
 /* Store latest known lat/lng for a given device in a redis geo-spatial analysis compatible manner. */
 async function addGeospatialHash(device_id: UUID, coordinates: [number, number]) {
   const client = await getClient()
   const [lat, lng] = coordinates
-  const res = await client.geoadd('locations', lng, lat, device_id)
+  const res = await client.geoadd(decorateKey('locations'), lng, lat, device_id)
   return res
 }
 
 async function getEventsInBBox(bbox: BoundingBox) {
+  const start = now()
   const client = await getClient()
   const [pt1, pt2] = bbox
   const points = bbox.map(pt => {
@@ -140,20 +235,32 @@ async function getEventsInBBox(bbox: BoundingBox) {
   })
   const [lng, lat] = [(pt1[0] + pt2[0]) / 2, (pt1[1] + pt2[1]) / 2]
   const radius = routeDistance(points)
-  return client.georadiusAsync('locations', lng, lat, radius, 'm')
+  const events = client.georadiusAsync(decorateKey('locations'), lng, lat, radius, 'm')
+  const finish = now()
+  const timeElapsed = finish - start
+  log.info(`MDS-CACHE getEventsInBBox ${JSON.stringify(bbox)} time elapsed: ${timeElapsed}ms`)
+  return events
 }
 
-async function hreads(suffixes: string[], device_ids: UUID[]): Promise<CachedItem[]> {
+async function hreads(
+  suffixes: string[],
+  ids: UUID[],
+  prefix: 'device' | 'provider' = 'device'
+): Promise<CachedItem[]> {
   if (suffixes === undefined) {
     throw new Error('hreads: no suffixes')
   }
-  if (device_ids === undefined) {
-    throw new Error('hreads: no device_ids')
+  if (ids === undefined) {
+    throw new Error('hreads: no ids')
   }
   // bleah
   const multi = (await getClient()).multi()
 
-  suffixes.map(suffix => device_ids.map(device_id => multi.hgetall(`device:${device_id}:${suffix}`)))
+  suffixes.map(suffix =>
+    ids.map(async id => {
+      await multi.hgetallAsync(decorateKey(`${prefix}:${id}:${suffix}`))
+    })
+  )
 
   /* eslint-reason external lib weirdness */
   /* eslint-disable-next-line promise/avoid-new */
@@ -168,7 +275,7 @@ async function hreads(suffixes: string[], device_ids: UUID[]): Promise<CachedIte
         resolve(
           replies.map((flat, index) => {
             if (flat) {
-              const flattened = { ...flat, device_id: device_ids[index % device_ids.length] }
+              const flattened = { ...flat, [`${prefix}_id`]: ids[index % ids.length] }
               return unflatten(flattened)
             }
             return unflatten(null)
@@ -179,28 +286,13 @@ async function hreads(suffixes: string[], device_ids: UUID[]): Promise<CachedIte
   })
 }
 
-// initial set of stats are super-simple: last-written values for device, event, and telemetry
-async function updateProviderStats(suffix: string, device_id: UUID, provider_id: UUID, timestamp?: Timestamp) {
-  try {
-    return (await getClient()).hmsetAsync(
-      `provider:${provider_id}:stats`,
-      `last${capitalizeFirst(suffix)}`,
-      timestamp || now()
-    )
-  } catch (err) {
-    const msg = `cannot updateProviderStats for unknown ${device_id}: ${err.message}`
-    await log.info(msg)
-    return Promise.resolve(msg)
-  }
-}
-
 // anything with a device_id, e.g. device, telemetry, etc.
 async function hwrite(suffix: string, item: CacheReadDeviceResult | Telemetry | VehicleEvent) {
   if (typeof item.device_id !== 'string') {
     await log.error(`hwrite: invalid device_id ${item.device_id}`)
     throw new Error(`hwrite: invalid device_id ${item.device_id}`)
   }
-  const { device_id, provider_id } = item
+  const { device_id } = item
   const key = `device:${device_id}:${suffix}`
   const flat: { [key: string]: unknown } = flatten(item)
   const nulls = nullKeys(flat)
@@ -210,24 +302,18 @@ async function hwrite(suffix: string, item: CacheReadDeviceResult | Telemetry | 
   if (nulls.length > 0) {
     // redis doesn't store null keys, so we have to delete them
     // TODO unit-test
-    await (await getClient()).hdelAsync(key, ...nulls)
+    await (await getClient()).hdelAsync(decorateKey(key), ...nulls)
   }
 
-  await (await getClient()).hmsetAsync(key, hmap)
-  if ('timestamp' in item) {
-    return Promise.all([
-      // make sure the device list is updated (per-provider)
-      updateVehicleList(device_id, item.timestamp),
-      // update last-written values
-      updateProviderStats(suffix, device_id, provider_id, item.timestamp)
-    ])
-  }
-  return Promise.all([
-    // make sure the device list is updated (per-provider)
-    updateVehicleList(device_id),
-    // update last-written values
-    updateProviderStats(suffix, device_id, provider_id)
-  ])
+  const client = await getClient()
+
+  await Promise.all(
+    (suffix === 'event' ? [`provider:${item.provider_id}:latest_event`, key] : [key]).map(k =>
+      client.hmsetAsync(k, hmap)
+    )
+  )
+
+  return updateVehicleList(device_id)
 }
 
 // put basics of device in the cache
@@ -239,11 +325,27 @@ async function writeDevice(device: Device) {
 }
 
 async function readKeys(pattern: string) {
-  return (await getClient()).keysAsync(pattern)
+  return (await getClient()).keysAsync(decorateKey(pattern))
+}
+
+async function getMostRecentEventByProvider(): Promise<{ provider_id: string; max: number }[]> {
+  const provider_ids = (await readKeys('provider:*:latest_event')).map(key => {
+    const [, provider_id] = key.split(':')
+    return provider_id
+  })
+  const result = await hreads(['latest_event'], provider_ids, 'provider')
+  return result.map(elem => {
+    const max = parseInt(elem.timestamp || '0')
+    return { provider_id: elem.provider_id, max }
+  })
 }
 
 async function wipeDevice(device_id: UUID) {
-  const keys = [`device:${device_id}:event`, `device:${device_id}:telemetry`, `device:${device_id}:device`]
+  const keys = [
+    decorateKey(`device:${device_id}:event`),
+    decorateKey(`device:${device_id}:telemetry`),
+    decorateKey(`device:${device_id}:device`)
+  ]
   if (keys.length > 0) {
     log.info('del', ...keys)
     return (await getClient()).delAsync(...keys)
@@ -289,10 +391,14 @@ async function writeEvent(event: VehicleEvent) {
 }
 
 async function readEvent(device_id: UUID): Promise<VehicleEvent> {
-  // log.info('redis read event', device_id)
   log.info('redis read event for', device_id)
-  const event = await hread('event', device_id)
-  return parseEvent(event as StringifiedEventWithTelemetry)
+  const start = now()
+  const rawEvent = await hread('event', device_id)
+  const event = parseEvent(rawEvent as StringifiedEventWithTelemetry)
+  const finish = now()
+  const timeElapsed = finish - start
+  log.info(`MDS-CACHE readEvent ${device_id} time elapsed: ${timeElapsed}ms`)
+  return event
 }
 
 async function readEvents(device_ids: UUID[]): Promise<VehicleEvent[]> {
@@ -306,14 +412,25 @@ async function readEvents(device_ids: UUID[]): Promise<VehicleEvent[]> {
 
 async function readAllEvents(): Promise<Array<VehicleEvent | null>> {
   // FIXME wildcard searching is slow
+  let start = now()
   const keys = await readKeys('device:*:event')
+  let finish = now()
+  let timeElapsed = finish - start
+  await log.info(`MDS-DAILY /admin/events -> cache.readAllEvents() readKeys() time elapsed: ${timeElapsed}ms`)
   const device_ids = keys.map(key => {
     const [, device_id] = key.split(':')
     return device_id
   })
-  return (await hreads(['event'], device_ids)).map(event => {
+
+  start = now()
+  const result = (await hreads(['event'], device_ids)).map(event => {
     return parseEvent(event as StringifiedEventWithTelemetry)
   })
+  finish = now()
+  timeElapsed = finish - start
+  await log.info(`MDS-DAILY /admin/events -> cache.readAllEvents() hreads() time elapsed: ${timeElapsed}ms`)
+
+  return result
 }
 
 async function readDevice(device_id: UUID) {
@@ -321,7 +438,13 @@ async function readDevice(device_id: UUID) {
     throw new Error('null device not legal to read')
   }
   // log.info('redis read device', device_id)
-  return parseDevice((await hread('device', device_id)) as StringifiedCacheReadDeviceResult)
+  const start = now()
+  const rawDevice = await hread('device', device_id)
+  const device = parseDevice(rawDevice as StringifiedCacheReadDeviceResult)
+  const finish = now()
+  const timeElapsed = finish - start
+  log.info(`MDS-CACHE readDevice ${device_id} time elapsed: ${timeElapsed}ms`)
+  return device
 }
 
 async function readDevices(device_ids: UUID[]) {
@@ -332,62 +455,81 @@ async function readDevices(device_ids: UUID[]) {
 }
 
 async function readDeviceStatus(device_id: UUID) {
-  let event: VehicleEvent
-  let device: Device
-  try {
-    event = await readEvent(device_id)
-    device = await readDevice(device_id)
-  } catch {
-    return null
-  }
+  // Read event and device in parallel, catching NotFoundErrors
+  const promises = [readEvent(device_id), readDevice(device_id)].map((p: Promise<{}>) =>
+    /* eslint-disable-next-line promise/prefer-await-to-callbacks */
+    p.catch((err: Error) => {
+      if (err.name !== 'NotFoundError') {
+        throw err
+      }
+    })
+  )
+  const results = await Promise.all(promises).catch(err => log.error('Error reading device status', err))
   const deviceStatusMap: { [device_id: string]: CachedItem | {} } = {}
-  const all = [device, event]
-  all.map(item => {
-    deviceStatusMap[item.device_id] = deviceStatusMap[item.device_id] || {}
-    Object.assign(deviceStatusMap[item.device_id], item)
-  })
-  const values = Object.values(deviceStatusMap)
-
-  return values.filter((item: any) => item.telemetry)[0]
+  results
+    .filter((item: CachedItem) => item !== undefined)
+    .map((item: CachedItem) => {
+      deviceStatusMap[item.device_id] = deviceStatusMap[item.device_id] || {}
+      Object.assign(deviceStatusMap[item.device_id], item)
+    })
+  const statuses = Object.values(deviceStatusMap)
+  return statuses.find((status: any) => status.telemetry) || statuses[0] || null
 }
 
 /* eslint-reason redis external lib weirdness */
 /* eslint-disable promise/prefer-await-to-then */
 /* eslint-disable promise/catch-or-return */
-async function readDevicesStatus(query: { since?: number; skip?: number; take?: number; bbox: BoundingBox }) {
+async function readDevicesStatus(query: {
+  since?: number
+  skip?: number
+  take?: number
+  bbox: BoundingBox
+  strict?: boolean
+}) {
   log.info('readDevicesStatus', JSON.stringify(query), 'start')
   const start = query.since || 0
   const stop = now()
+  const strictChecking = query.strict
 
   log.info('redis zrangebyscore device-ids', start, stop)
   const client = await getClient()
 
+  const geoStart = now()
   const { bbox } = query
   const deviceIdsInBbox = await getEventsInBBox(bbox)
   const deviceIdsRes =
-    deviceIdsInBbox.length === 0 ? await client.zrangebyscoreAsync('device-ids', start, stop) : deviceIdsInBbox
+    deviceIdsInBbox.length === 0
+      ? await client.zrangebyscoreAsync(decorateKey('device-ids'), start, stop)
+      : deviceIdsInBbox
   const skip = query.skip || 0
   const take = query.take || 100000000000
   const deviceIds = deviceIdsRes.slice(skip, skip + take)
+  const geoFinish = now()
+  const timeElapsed = geoFinish - geoStart
+  log.info(`MDS-CACHE readDevicesStatus bbox fetch ${JSON.stringify(bbox)} time elapsed: ${timeElapsed}ms`)
 
-  const deviceStatusMap: { [device_id: string]: CachedItem | {} } = {}
-
+  const eventsStart = now()
   const events = ((await hreads(['event'], deviceIds)) as StringifiedEvent[])
     .reduce((acc: VehicleEvent[], item: StringifiedEventWithTelemetry) => {
       try {
         const parsedItem = parseEvent(item)
         if (
-          EVENT_STATUS_MAP[parsedItem.event_type] !== VEHICLE_STATUSES.removed &&
-          (parsedItem.telemetry && isInsideBoundingBox(parsedItem.telemetry, query.bbox))
+          EVENT_STATUS_MAP[parsedItem.event_type] === VEHICLE_STATUSES.removed ||
+          !parsedItem.telemetry ||
+          (strictChecking && !isInsideBoundingBox(parsedItem.telemetry, query.bbox))
         )
-          return [...acc, parsedItem]
-        return acc
+          return acc
+        return [...acc, parsedItem]
       } catch (err) {
         return acc
       }
     }, [])
     .filter(item => Boolean(item))
+  const eventsFinish = now()
+  const eventsTimeElapsed = eventsFinish - eventsStart
+  log.info(`MDS-CACHE readDevicesStatus bbox check ${JSON.stringify(bbox)} time elapsed: ${eventsTimeElapsed}ms`)
 
+  const devicesStart = now()
   const eventDeviceIds = events.map(event => event.device_id)
   const devices = (await hreads(['device'], eventDeviceIds))
     .reduce((acc: (Device | Telemetry | VehicleEvent)[], item: CachedItem) => {
@@ -400,13 +542,20 @@ async function readDevicesStatus(query: { since?: number; skip?: number; take?: 
     }, [])
     .filter(item => Boolean(item))
   const all = [...devices, ...events]
+  const deviceStatusMap: { [device_id: string]: CachedItem | {} } = {}
   all.map(item => {
     deviceStatusMap[item.device_id] = deviceStatusMap[item.device_id] || {}
     Object.assign(deviceStatusMap[item.device_id], item)
   })
   const values = Object.values(deviceStatusMap)
+  const valuesWithTelemetry = values.filter((item: any) => item.telemetry)
+  const devicesFinish = now()
+  const devicesTimeElapsed = devicesFinish - devicesStart
+  log.info(
+    `MDS-CACHE readDevicesStatus device processing ${JSON.stringify(bbox)} time elapsed: ${devicesTimeElapsed}ms`
+  )
 
-  return values.filter((item: any) => item.telemetry)
+  return valuesWithTelemetry
 }
 
 async function readTelemetry(device_id: UUID): Promise<Telemetry> {
@@ -461,16 +610,6 @@ async function readAllTelemetry() {
       return acc
     }
   }, [])
-}
-
-async function readProviderStats(provider_id: UUID) {
-  const key = `provider:${provider_id}:stats`
-  const flat = await (await getClient()).hgetallAsync(key)
-  if (!flat) {
-    throw new Error(`no stats found for provider_id ${provider_id}`)
-  } else {
-    return unflatten(flat)
-  }
 }
 
 async function seed(dataParam: { devices: Device[]; events: VehicleEvent[]; telemetry: Telemetry[] }) {
@@ -559,6 +698,16 @@ export = {
   initialize,
   health,
   info,
+  getVehicleType,
+  readDeviceState,
+  readAllDeviceStates,
+  writeDeviceState,
+  readTripsEvents,
+  readAllTripsEvents,
+  writeTripsEvents,
+  deleteTripsEvents,
+  readTripsTelemetry,
+  writeTripsTelemetry,
   seed,
   reset,
   startup,
@@ -576,9 +725,9 @@ export = {
   readAllEvents,
   readTelemetry,
   readAllTelemetry,
-  readProviderStats,
   readKeys,
   wipeDevice,
   updateVehicleList,
-  cleanup
+  cleanup,
+  getMostRecentEventByProvider
 }

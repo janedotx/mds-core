@@ -15,17 +15,16 @@
  */
 
 import express from 'express'
+import { pathsFor, ServerError, AuthorizationError, NotFoundError } from '@mds-core/mds-utils'
+
 import {
-  pathsFor,
   ValidationError,
-  ServerError,
-  AuthorizationError,
   isValidDeviceId,
-  NotFoundError,
   isValidProviderId,
   isValidTimestamp,
   isValidNumber
-} from '@mds-core/mds-utils'
+} from '@mds-core/mds-schema-validators'
+
 import logger from '@mds-core/mds-logger'
 import db from '@mds-core/mds-db'
 import { UUID, Timestamp } from '@mds-core/mds-types'
@@ -53,16 +52,10 @@ function api(app: express.Express): express.Express {
   // ///////////////////// begin middleware ///////////////////////
   app.use(async (req: ApiRequest, res: ApiResponse, next: express.NextFunction) => {
     if (!(req.path.includes('/health') || req.path === '/')) {
-      try {
-        if (!res.locals.claims) {
-          return res.status(401).send({ error: new AuthorizationError('missing_claims') })
-        }
-      } catch (err) {
-        /* istanbul ignore next */
-        return InternalServerError(req, res, err)
+      if (!res.locals.claims) {
+        return res.status(401).send({ error: new AuthorizationError('missing_claims') })
       }
     }
-    logger.info(req.method, req.originalUrl)
     return next()
   })
   // ///////////////////// begin middleware ///////////////////////

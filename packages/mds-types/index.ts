@@ -18,17 +18,19 @@ import { FeatureCollection } from 'geojson'
 export { AccessTokenScope, AccessTokenScopes, ScopeDescriptions } from './scopes'
 
 export const Enum = <T extends string>(...keys: T[]) =>
-  Object.freeze(keys.reduce((e, key) => {
-    return { ...e, [key]: key }
-  }, {}) as { [K in T]: K })
+  Object.freeze(
+    keys.reduce((e, key) => {
+      return { ...e, [key]: key }
+    }, {}) as { [K in T]: K }
+  )
 
 export const isEnum = (enums: { [key: string]: string }, value: unknown) =>
   typeof value === 'string' && typeof enums === 'object' && enums[value] === value
 
-export const VEHICLE_TYPES = Enum('carshare', 'bicycle', 'scooter', 'recumbent')
+export const VEHICLE_TYPES = Enum('car', 'bicycle', 'scooter', 'moped', 'recumbent')
 export type VEHICLE_TYPE = keyof typeof VEHICLE_TYPES
 
-export const RULE_TYPES = Enum('count', 'speed', 'time')
+export const RULE_TYPES = Enum('count', 'speed', 'time', 'user')
 export type RULE_TYPE = keyof typeof RULE_TYPES
 
 export const RULE_UNIT_MAP = {
@@ -36,11 +38,184 @@ export const RULE_UNIT_MAP = {
   hours: 60 * 60
 }
 
+// Event Streaming
+export interface StateEntry {
+  vehicle_type: VEHICLE_TYPE
+  type: string
+  timestamp: Timestamp
+  device_id: UUID
+  provider_id: UUID
+  recorded: Timestamp
+  annotation_version: number
+  annotation: AnnotationData | null
+  gps?: GpsData | null
+  service_area_id?: UUID | null // telemetry entries will be null
+  charge?: number | null
+  state: VEHICLE_STATUS | null // telemetry entries will be null
+  event_type: VEHICLE_EVENT | null // telemetry entries will be null
+  event_type_reason?: VEHICLE_REASON | null // telemetry entries will be null
+  trip_id?: UUID | null // telemetry entries will be null
+}
+
+export interface AnnotationData {
+  in_bound: boolean
+  /* eslint-reason TODO: areas have not been defined yet within the scope of MJ */
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  areas: any
+}
+
+export interface TripEvent {
+  vehicle_type: VEHICLE_TYPE
+  timestamp: Timestamp
+  event_type: VEHICLE_EVENT | null // telemetry entries will be null
+  event_type_reason?: VEHICLE_REASON | null
+  annotation_version: number
+  annotation: AnnotationData | null
+  gps?: GpsData | null
+  service_area_id?: UUID | null
+}
+
+export type TripsEvents = { [trip_id: string]: TripEvent[] }
+
+export interface TripTelemetry {
+  timestamp: Timestamp
+  latitude: number | null
+  longitude: number | null
+  annotation_version: number
+  annotation: AnnotationData | null
+  service_area_id?: UUID | null
+}
+
+export type TripsTelemetry = { [trip_id: string]: TripTelemetry[] }
+
+export interface TripEntry {
+  vehicle_type: VEHICLE_TYPE
+  trip_id: UUID
+  device_id: UUID
+  provider_id: UUID
+  recorded: Timestamp
+  start_time: Timestamp
+  end_time: Timestamp
+  start_service_area_id?: UUID | null
+  end_service_area_id?: UUID | null
+  duration: number // in milliseconds
+  distance: number | null // default in miles
+  violation_count: number
+  max_violation_dist: number | null
+  min_violation_dist: number | null
+  avg_violation_dist: number | null
+  events: TripEvent[]
+  telemetry: TripTelemetry[][]
+}
+
+export interface ProviderStreamData {
+  invalidEvents: StateEntry[]
+  duplicateEvents: StateEntry[]
+  outOfOrderEvents: StateEntry[]
+}
+
+export interface MetricCount {
+  count: number
+  min: number | null
+  max: number | null
+  average: number | null
+}
+export interface LateMetricObj {
+  /** Number of trip_start and trip_end events out of compliance with time SLA. */
+  start_end: MetricCount
+  /** Number of trip_enter and trip_leave events out of compliance with time SLA. */
+  enter_leave: MetricCount
+  /** Number of telemetry events out of compliance with time SLA. */
+  telemetry: MetricCount
+}
+
+export interface VehicleCountMetricObj {
+  /** Total number of registered vehicles at start of bin. */
+  registered: number | null
+  /** Total number of vehicles in the right-of-way at start of bin (available, reserved, trip). */
+  deployed: number | null
+  /** Number of vehicles in the right-of-way with 0 charge at start of bin. */
+  dead: number | null
+}
+
+export interface MetricsTableRow {
+  recorded: Timestamp
+  /** Timestamp for start of bin (currently houry bins). */
+  start_time: Timestamp
+  /** Bin size. */
+  bin_size: 'hour' | 'day'
+  /** Geography this row applies to.  `null` = the entire organization. */
+  geography: null | string // TODO: May be geography 'name', may be 'id'. ???
+  /** Serice provider id */
+  provider_id: UUID
+  /** Vehicle type. */
+  vehicle_type: VEHICLE_TYPE
+  /** Number of events registered within the bin, by type. */
+  event_counts: { [S in VEHICLE_METRIC_EVENT]: number }
+  vehicle_counts: VehicleCountMetricObj
+  /** Number of trips in region, derived from distinct trip ids. */
+  trip_count: number
+  /** Number of vehicles with: {0 trips:count, 1 trip:count, 2 trips:count, ...] during bin. */
+  vehicle_trips_count: { [x: number]: number } | null
+  /** Number of events which out of compliance with time SLA. */
+  // TODO:  break into object with this binning, other event types not important. (?)
+  event_time_violations: LateMetricObj
+  /** Number of telemetry events out of compliance with distance SLA. */
+  telemetry_distance_violations: MetricCount
+  /** Number of event anomalies. */
+  // TODO:  break into object like so
+  bad_events: {
+    /** Number of invalid events (not matching event state machine). */
+    invalid_count: number | null
+    /** Number of duplicate events submitted. */
+    duplicate_count: number | null
+    /** Number of out-of-order events submitted (according to state machine). */
+    out_of_order_count: number | null
+  }
+  /** SLA values used in these calculations, as of start of bin. */
+  // TODO:  break into object like so:
+  sla: {
+    /** Maximum number of deployed vehicles for provider. Comes from Policy rules. */
+    // Typical SLA: 500-2000 vehicles
+    max_vehicle_cap: number
+    /** Minimum number of registered vehicles for provider. */
+    // Typical SLA: 100 vehicles
+    min_registered: number
+    /** Minumum number of trip_start events. */
+    // Typical SLA: 100 events???
+    // TODO: per day???
+    min_trip_start_count: number
+    /** Minumum number of trip_end events. */
+    // Typical SLA: 100 events???
+    // TODO: per day???
+    min_trip_end_count: number
+    /** Minumum number of telemetry events. */
+    // Typical SLA: 1000 events???
+    // TODO: per day???
+    min_telemetry_count: number
+    /** Maximum time between trip_start or trip_end event and submission to server. */
+    // Typical SLA: 30 seconds
+    // TODO: per day???
+    max_start_end_time: number
+    /** Maximum time between trip_enter or trip_leave event and submission to server. */
+    // Typical SLA: 30 seconds
+    max_enter_leave_time: number
+    /** Maximum time between telemetry event and submission to server. */
+    // Typical SLA: 1680 seconds
+    max_telemetry_time: number
+    /** Maximum distance between telemetry events when on-trip. */
+    // Typical SLA: 100 meters
+    max_telemetry_distance: number
+  }
+}
+
 export const PROPULSION_TYPES = Enum('human', 'electric', 'electric_assist', 'hybrid', 'combustion')
 export type PROPULSION_TYPE = keyof typeof PROPULSION_TYPES
 
 export const VEHICLE_STATUSES = Enum('available', 'reserved', 'unavailable', 'removed', 'inactive', 'trip', 'elsewhere')
 export type VEHICLE_STATUS = keyof typeof VEHICLE_STATUSES
+
+export const RIGHT_OF_WAY_STATUSES = ['available', 'reserved', 'unavailable', 'trip']
 
 export const VEHICLE_EVENTS = Enum(
   'register',
@@ -58,7 +233,12 @@ export const VEHICLE_EVENTS = Enum(
   'trip_end',
   'deregister'
 )
+
+export const VEHICLE_METRIC_EVENTS = { ...VEHICLE_EVENTS, telemetry: 'telemetry' }
+
 export type VEHICLE_EVENT = keyof typeof VEHICLE_EVENTS
+
+export type VEHICLE_METRIC_EVENT = keyof typeof VEHICLE_METRIC_EVENTS
 
 export const VEHICLE_REASONS = Enum(
   'battery_charged',
@@ -177,12 +357,6 @@ export interface VehicleEvent {
   recorded: Timestamp
 }
 
-export interface VehicleEventSummary {
-  provider_event_id: number | null
-  provider_event_type: VEHICLE_EVENT | null
-  provider_event_type_reason?: VEHICLE_REASON | null
-}
-
 // Standard telemetry columns (used in more than one table)
 export interface TelemetryData {
   lat: number
@@ -195,6 +369,8 @@ export interface TelemetryData {
   satellites?: number | null
   charge?: number | null
 }
+
+export type GpsData = Omit<TelemetryData, 'charge'>
 
 // While telemetry data is stored in a flattened format, when passed as a parameter it has
 // a different shape: { gps: { lat, lng, speed, heading, accurace, altitude } charge }. This
@@ -211,6 +387,23 @@ export interface Telemetry extends WithGpsProperty<TelemetryData> {
   recorded?: Timestamp
 }
 
+// Represents a row in the "attachments" table
+export interface Attachment {
+  attachment_filename: string
+  attachment_id: UUID
+  base_url: string
+  mimetype: string
+  thumbnail_filename?: string | null
+  thumbnail_mimetype?: string | null
+  recorded?: Timestamp | null
+}
+
+export interface AttachmentSummary {
+  attachment_id: UUID
+  attachment_url: string
+  thumbnail_url?: string | null
+}
+
 // Represents a row in the "audits" table
 export interface Audit {
   audit_trip_id: UUID
@@ -224,6 +417,13 @@ export interface Audit {
   recorded: Timestamp
 }
 
+// Represents a row in the "audit_attachments" table
+export interface AuditAttachment {
+  attachment_id: UUID
+  audit_trip_id: UUID
+  recorded: Timestamp
+}
+
 // Represents a row in the "audit_events" table
 export interface AuditEvent extends TelemetryData {
   audit_trip_id: UUID
@@ -232,15 +432,18 @@ export interface AuditEvent extends TelemetryData {
   audit_issue_code?: string | null
   audit_subject_id: string
   note?: string | null
-  provider_event_id?: number | null
-  provider_event_type?: string | null
-  provider_event_type_reason?: string | null
   timestamp: Timestamp
   recorded: Timestamp
 }
 
 export interface AuditDetails extends Audit {
   events: WithGpsProperty<AuditEvent>[]
+  provider_event_type?: string | null
+  provider_event_type_reason?: string | null
+  provider_status?: string | null
+  provider_telemetry?: Telemetry | null
+  provider_event_time?: Timestamp | null
+  attachments: AttachmentSummary[]
   provider: null | {
     device: Device
     events: VehicleEvent[]
@@ -350,7 +553,6 @@ export interface ComplianceResponse {
 export interface Geography {
   geography_id: UUID
   geography_json: FeatureCollection
-  read_only?: boolean
   prev_geographies?: UUID[]
   name: string
   publish_date?: Timestamp
@@ -401,4 +603,28 @@ export interface Provider {
   url?: string
   mds_api_url?: string
   gbfs_api_url?: string
+}
+
+export interface Stop {
+  stop_id: UUID
+  stop_name: string
+  short_name?: string
+  platform_code?: string
+  geography_id?: UUID
+  lat: number
+  lng: number
+  zone_id?: UUID
+  address?: string
+  post_code?: string
+  rental_methods?: string // TOOD: enum?
+  capacity: Partial<{ [S in VEHICLE_TYPE]: number }>
+  location_type?: string // TODO: enum?
+  timezone?: string
+  cross_street?: string
+  num_vehicles_available: Partial<{ [S in VEHICLE_TYPE]: number }>
+  num_vehicles_disabled?: Partial<{ [S in VEHICLE_TYPE]: number }>
+  num_spots_available: Partial<{ [S in VEHICLE_TYPE]: number }>
+  num_spots_disabled?: Partial<{ [S in VEHICLE_TYPE]: number }>
+  wheelchair_boarding?: boolean
+  reservation_cost?: Partial<{ [S in VEHICLE_TYPE]: number }> // Cost to reserve a spot per vehicle_type
 }

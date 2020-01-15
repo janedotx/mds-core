@@ -160,7 +160,7 @@ export async function readEventsForStatusChanges(params: ReadEventsQueryParams):
   }
 }
 
-export async function readHistoricalEvents(params: ReadHistoricalEventsQueryParams) {
+export async function readHistoricalEvents(params: ReadHistoricalEventsQueryParams): Promise<VehicleEvent[]> {
   const { provider_id: query_provider_id, end_date } = params
   const client = await getReadOnlyClient()
   const vals = new SqlVals()
@@ -260,27 +260,39 @@ export async function getEventCountsPerProviderSince(
   stop = now()
 ): Promise<{ provider_id: UUID; event_type: string; count: number; slacount: number }[]> {
   const thirty_sec = seconds(30)
-  const sql = `select provider_id, event_type, count(*), count(case when (recorded-timestamp) > ${thirty_sec} then 1 else null end) as slacount from events where recorded > ${start} and recorded < ${stop} group by provider_id, event_type`
-  return makeReadOnlyQuery(sql)
+  const vals = new SqlVals()
+  const sql = `select provider_id, event_type, count(*), count(case when (recorded-timestamp) > ${vals.add(
+    thirty_sec
+  )} then 1 else null end) as slacount from events where recorded > ${vals.add(start)} and recorded < ${vals.add(
+    stop
+  )} group by provider_id, event_type`
+  return makeReadOnlyQuery(sql, vals)
 }
 
 export async function getEventsLast24HoursPerProvider(start = yesterday(), stop = now()): Promise<VehicleEvent[]> {
-  const sql = `select provider_id, device_id, event_type, recorded, timestamp from ${schema.TABLE.events} where recorded > ${start} and recorded < ${stop} order by "timestamp" ASC`
-  return makeReadOnlyQuery(sql)
+  const vals = new SqlVals()
+  const sql = `select provider_id, device_id, event_type, recorded, timestamp from ${
+    schema.TABLE.events
+  } where recorded > ${vals.add(start)} and recorded < ${vals.add(stop)} order by "timestamp" ASC`
+  return makeReadOnlyQuery(sql, vals)
 }
 
 export async function getNumEventsLast24HoursByProvider(
   start = yesterday(),
   stop = now()
 ): Promise<{ provider_id: UUID; count: number }[]> {
-  const sql = `select provider_id, count(*) from ${schema.TABLE.events} where recorded > ${start} and recorded < ${stop} group by provider_id`
-  return makeReadOnlyQuery(sql)
+  const vals = new SqlVals()
+  const sql = `select provider_id, count(*) from ${schema.TABLE.events} where recorded > ${vals.add(
+    start
+  )} and recorded < ${vals.add(stop)} group by provider_id`
+  return makeReadOnlyQuery(sql, vals)
 }
 export async function readEventsWithTelemetry({
   device_id,
   provider_id,
   start_time,
   end_time,
+  order_by = 'id',
   last_id = 0,
   limit = 1000
 }: Partial<{
@@ -288,6 +300,7 @@ export async function readEventsWithTelemetry({
   provider_id: UUID
   start_time: Timestamp
   end_time: Timestamp
+  order_by: string
   last_id: number
   limit: number
 }>): Promise<Recorded<VehicleEvent>[]> {
@@ -334,10 +347,10 @@ export async function readEventsWithTelemetry({
   const { rows } = await exec(
     `SELECT E.*, T.lat, T.lng, T.speed, T.heading, T.accuracy, T.altitude, T.charge, T.timestamp AS telemetry_timestamp FROM (SELECT * FROM ${
       schema.TABLE.events
-    }${where} ORDER BY id LIMIT ${vals.add(limit)}
+    }${where} ORDER BY ${order_by} LIMIT ${vals.add(limit)}
     ) AS E LEFT JOIN ${
       schema.TABLE.telemetry
-    } T ON E.device_id = T.device_id AND CASE WHEN E.telemetry_timestamp IS NULL THEN E.timestamp ELSE E.telemetry_timestamp END = T.timestamp ORDER BY id`,
+    } T ON E.device_id = T.device_id AND CASE WHEN E.telemetry_timestamp IS NULL THEN E.timestamp ELSE E.telemetry_timestamp END = T.timestamp ORDER BY ${order_by}`,
     vals.values()
   )
 

@@ -6,7 +6,7 @@ import { MDSPostgresClient } from './sql-utils'
 import { getReadOnlyClient, getWriteableClient, makeReadOnlyQuery } from './client'
 
 import {
-  readDeviceByVehicleId,
+  readDevicesByVehicleId,
   readDeviceIds,
   readDevice,
   readDeviceList,
@@ -34,6 +34,7 @@ import {
   readPolicies,
   writePolicy,
   readPolicy,
+  findPoliciesByGeographyID,
   editPolicy,
   deletePolicy,
   writePolicyMetadata,
@@ -62,16 +63,7 @@ import {
 
 import { readAudit, readAudits, writeAudit, deleteAudit, readAuditEvents, writeAuditEvent } from './audits'
 
-import {
-  writeTrips,
-  updateTrip,
-  readTrips,
-  readTripList,
-  readTripIds,
-  getLatestTripTime,
-  getTripEventsLast24HoursByProvider,
-  getTripCountsPerProviderSince
-} from './trips'
+import { readTripIds, getTripEventsLast24HoursByProvider, getTripCountsPerProviderSince } from './trips'
 
 import {
   readTelemetry,
@@ -80,12 +72,28 @@ import {
   getMostRecentTelemetryByProvider
 } from './telemetry'
 
+import { writeStop, readStop, readStops } from './stops'
 import {
-  writeStatusChanges,
-  readStatusChanges,
-  readUnprocessedStatusChangeEvents,
-  getLatestStatusChangeTime
-} from './status_changes'
+  deleteAttachment,
+  deleteAuditAttachment,
+  readAttachmentsForAudit,
+  readAuditAttachments,
+  writeAttachment,
+  writeAuditAttachment
+} from './attachments'
+
+import {
+  getStates,
+  getTrips,
+  getTripCount,
+  getVehicleTripCount,
+  getLateEventCount,
+  getLateTelemetryCount,
+  insertDeviceStates,
+  insertTrips,
+  insertMetrics,
+  getAllMetrics
+} from './processors'
 
 async function initialize() {
   const client: MDSPostgresClient = await getWriteableClient()
@@ -179,7 +187,7 @@ export = {
   seed,
   startup,
   shutdown,
-  readDeviceByVehicleId,
+  readDevicesByVehicleId,
   readDeviceIds,
   readDevice,
   readDeviceList,
@@ -198,10 +206,21 @@ export = {
   deleteAudit,
   readAuditEvents,
   writeAuditEvent,
-  writeTrips,
-  updateTrip,
-  readTrips,
-  readTripList,
+  deleteAttachment,
+  deleteAuditAttachment,
+  readAttachmentsForAudit,
+  readAuditAttachments,
+  writeAttachment,
+  writeAuditAttachment,
+  getStates,
+  getTrips,
+  getTripCount,
+  getVehicleTripCount,
+  getLateEventCount,
+  getLateTelemetryCount,
+  insertDeviceStates,
+  insertTrips,
+  insertMetrics,
   readGeographies,
   readGeographySummaries,
   writeGeography,
@@ -210,6 +229,7 @@ export = {
   isGeographyPublished,
   editGeography,
   readPolicies,
+  findPoliciesByGeographyID,
   writePolicy,
   readPolicy,
   editPolicy,
@@ -226,13 +246,9 @@ export = {
   publishPolicy,
   isPolicyPublished,
   readRule,
-  writeStatusChanges,
-  readStatusChanges,
   getEventCountsPerProviderSince,
   getTelemetryCountsPerProviderSince,
   getTripCountsPerProviderSince,
-  getLatestTripTime,
-  getLatestStatusChangeTime,
   getNumVehiclesRegisteredLast24HoursByProvider,
   getMostRecentEventByProvider,
   getVehicleCountsPerProvider,
@@ -240,8 +256,11 @@ export = {
   getMostRecentTelemetryByProvider,
   getTripEventsLast24HoursByProvider,
   getEventsLast24HoursPerProvider,
-  readUnprocessedStatusChangeEvents,
   readEventsWithTelemetry,
   readTripIds,
-  readEventsForStatusChanges
+  readEventsForStatusChanges,
+  getAllMetrics,
+  writeStop,
+  readStop,
+  readStops
 }

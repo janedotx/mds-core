@@ -29,7 +29,10 @@ import {
   getVehiclesByProvider,
   updateVehicle,
   submitVehicleEvent,
-  submitVehicleTelemetry
+  submitVehicleTelemetry,
+  registerStop,
+  readStop,
+  readStops
 } from './request-handlers'
 import { readAllVehicleIds } from './agency-candidate-request-handlers'
 import { getCacheInfo, wipeDevice, refreshCache } from './sandbox-admin-request-handlers'
@@ -124,11 +127,19 @@ function api(app: express.Express): express.Express {
   /**
    * Not currently in Agency spec.  Ability to read back all vehicle IDs.
    */
-  app.get(pathsFor('/admin/vehicle_ids'), checkAccess(scopes => scopes.includes('admin:all')), readAllVehicleIds)
+  app.get(
+    pathsFor('/admin/vehicle_ids'),
+    checkAccess(scopes => scopes.includes('admin:all')),
+    readAllVehicleIds
+  )
 
   // /////////////////// end Agency candidate endpoints ////////////////////
 
-  app.get(pathsFor('/admin/cache/info'), checkAccess(scopes => scopes.includes('admin:all')), getCacheInfo)
+  app.get(
+    pathsFor('/admin/cache/info'),
+    checkAccess(scopes => scopes.includes('admin:all')),
+    getCacheInfo
+  )
 
   // wipe a device -- sandbox or admin use only
   app.get(
@@ -138,7 +149,21 @@ function api(app: express.Express): express.Express {
     wipeDevice
   )
 
-  app.get(pathsFor('/admin/cache/refresh'), checkAccess(scopes => scopes.includes('admin:all')), refreshCache)
+  app.get(
+    pathsFor('/admin/cache/refresh'),
+    checkAccess(scopes => scopes.includes('admin:all')),
+    refreshCache
+  )
+
+  app.post(
+    pathsFor('/stops'),
+    checkAccess(scopes => scopes.includes('admin:all')),
+    registerStop
+  )
+
+  app.get(pathsFor('/stops/:stop_id'), readStop)
+
+  app.get(pathsFor('/stops'), readStops)
 
   return app
 }
